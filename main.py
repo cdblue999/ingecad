@@ -8,6 +8,15 @@ Licensed under GPL-3.0-or-later. See LICENSE.
 """
 from __future__ import annotations
 
+import sys
+import os
+
+# --- Optymalizacja pod Windows 11 (Intel UHD + GT 640M) ---
+if sys.platform == "win32":
+    os.environ["QSG_RHI_BACKEND"] = "d3d11"
+    os.environ["QT_API"] = "pyside6"
+    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+# -----------------------------------------------------------
 import os
 import sys
 from pathlib import Path
