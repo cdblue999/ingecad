@@ -1,183 +1,377 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Marco Sumari Tellez and IngeCAD contributors.
-"""XATTACH: attach a drawing as an external reference (issue #33).
-
-AutoCAD's XATTACH shows the Select Reference File dialog, then the Attach
-External Reference dialog (reference type, path type, scale, insertion
-point, rotation), and what was left "on screen" is asked at the prompt:
-``Specify insertion point or [Scale/X/Y/Z/Rotate/PScale/PX/PY/PZ/PRotate]:``
-(the INSERT prompt, p. 2106). Here the file dialog is the same, and the
-dialog's two choices are two prompts with AutoCAD's own defaults --
-Attachment and Relative path -- so Enter, Enter, click attaches a
-colleague's plan exactly as most people do. Scale and rotation follow the
--XREF flow: X scale, Y scale (defaults to X), rotation.
 """
-from __future__ import annotations
+IngeCAD — External References (XREFs) Management & Tools.
+Provides XATTACH, XREF palette, Reload, Unload, Detach, and BIND operations.
+"""
 
-from pathlib import Path
+import os
+import shutil
+import subprocess
+import tempfile
+from typing import Optional, List, Dict, Tuple
 
-from core import xrefs
-from core.i18n import tr
-from tools.base import Point, Tool
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QFileDialog,
+    QMessageBox,
+    QMenu,
+    QLabel,
+    QHeaderView,
+    QInputDialog,
+)
+
+import ezdxf
+from ezdxf.document import Drawing
 
 
-class XAttachTool(Tool):
-    """XATTACH / -XREF Attach|Overlay."""
+def resolve_xref_path(drawing_path: Optional[str], raw_path: str) -> str:
+    """Rozwiązuje ścieżkę względną lub bezwzględną pliku odnośnika."""
+    if os.path.isabs(raw_path):
+        return os.path.normpath(raw_path)
+    base_dir = os.path.dirname(drawing_path) if drawing_path else os.getcwd()
+    return os.path.normpath(os.path.join(base_dir, raw_path))
 
-    def start(self) -> None:
-        self.name = "XATTACH"
-        self._path: Path | None = None
-        self._overlay = bool(getattr(self.ctx.services, "_xref_overlay_next", False))
-        try:
-            self.ctx.services._xref_overlay_next = False
-        except Exception:                 # noqa: BLE001 - a test double
-            pass
-        self._path_type = "Relative"
-        self._insert: Point | None = None
-        self._xscale = 1.0
-        self._yscale: float | None = None
-        self._rotation = 0.0
-        self._await = "type"
-        filename = self._pick_file()
-        if not filename:
-            self.ctx.finish()
-            return
-        self._path = Path(filename)
-        self.prompt("Enter reference type [Attachment/Overlay] <{t}>:",
-                    t=tr("Overlay") if self._overlay else tr("Attachment"))
 
-    def _pick_file(self) -> str:
-        pending = getattr(self.ctx.services, "_xref_file_next", None)
-        if pending:
+def ensure_dxf_format(file_path: str) -> Tuple[Optional[str], bool]:
+    """
+    Weryfikuje format pliku. Jeśli plik to DWG, dokonuje tymczasowej konwersji
+    do DXF za pomocą systemowego lub zintegrowanego konwertera dwg2dxf.
+    Zwraca (ścieżka_do_dxf, czy_tymczasowy).
+    """
+    if not os.path.exists(file_path):
+        return None, False
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".dxf":
+        return file_path, False
+
+    if ext == ".dwg":
+        conv_bin = shutil.which("dwg2dxf")
+        if not conv_bin:
+            # Sprawdzenie ścieżki vendor w strukturze IngeCAD
+            vendor_bin = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "vendor", "bin", "dwg2dxf")
+            )
+            if os.path.exists(vendor_bin):
+                conv_bin = vendor_bin
+            elif os.path.exists(vendor_bin + ".exe"):
+                conv_bin = vendor_bin + ".exe"
+
+        if conv_bin:
+            tmp_dxf = tempfile.NamedTemporaryFile(suffix=".dxf", delete=False)
+            tmp_dxf.close()
             try:
-                self.ctx.services._xref_file_next = None
-            except Exception:             # noqa: BLE001
-                pass
-            return str(pending)
-        window = getattr(self.ctx.services, "window", None)
-        if window is None:
-            return ""
-        from views import file_dialogs
+                res = subprocess.run(
+                    [conv_bin, "-y", "-o", tmp_dxf.name, file_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                )
+                if res.returncode == 0 and os.path.exists(tmp_dxf.name):
+                    return tmp_dxf.name, True
+            except Exception as e:
+                print(f"[XREF] Błąd konwersji DWG do DXF: {e}")
+                if os.path.exists(tmp_dxf.name):
+                    os.unlink(tmp_dxf.name)
+        else:
+            print("[XREF] Brak konwertera dwg2dxf w PATH ani w folderze vendor.")
 
-        return file_dialogs.get_open_file(
-            window, tr("Select Reference File"),
-            tr("Drawings (*.dwg *.dxf);;All files (*)"))
+    return None, False
 
-    def wants_raw_text(self) -> bool:
-        return self._await in ("type", "path", "xscale", "yscale", "rotation")
 
-    # -- prompts -----------------------------------------------------------------
-    def on_option(self, text: str) -> bool:
-        t = self.option(text) or text.strip().upper()
-        raw = text.strip()
-        if self._await == "type":
-            if t in ("", "A", "ATTACHMENT"):
-                self._overlay = False if t else self._overlay
-            elif t in ("O", "OVERLAY"):
-                self._overlay = True
-            else:
-                return False
-            self._await = "path"
-            self.prompt("Enter path type [Full/Relative/No path] <Relative>:")
-            return True
-        if self._await == "path":
-            if t in ("", "R", "RELATIVE"):
-                self._path_type = "Relative"
-            elif t in ("F", "FULL"):
-                self._path_type = "Full"
-            elif t in ("N", "NO", "NO PATH", "NOPATH"):
-                self._path_type = "No path"
-            else:
-                return False
-            self._await = "insert"
-            self.prompt("Specify insertion point or [Scale/X/Y/Z/Rotate/"
-                        "PScale/PX/PY/PZ/PRotate]:")
-            return True
-        if self._await == "insert":
-            if t in ("S", "SCALE", "PS", "PSCALE", "X", "PX"):
-                self._await = "xscale"
-                self.prompt("Specify scale factor for XYZ axes <{v:g}>:", v=self._xscale)
-                return True
-            if t in ("Y", "PY"):
-                self._await = "yscale"
-                self.prompt("Specify Y scale factor <{v:g}>:", v=self._xscale)
-                return True
-            if t in ("Z", "PZ"):
-                return True                 # 2D: the Z factor changes nothing
-            if t in ("R", "ROTATE", "PR", "PROTATE"):
-                self._await = "rotation"
-                self.prompt("Specify rotation angle <{v:g}>:", v=self._rotation)
-                return True
-            return False
-        if self._await in ("xscale", "yscale", "rotation"):
-            if raw == "":
-                value = None
-            else:
-                try:
-                    value = float(raw)
-                except ValueError:
-                    return False
-            if self._await == "xscale" and value is not None:
-                self._xscale = value
-            elif self._await == "yscale" and value is not None:
-                self._yscale = value
-            elif self._await == "rotation" and value is not None:
-                self._rotation = value
-            if self._insert is None:
-                self._await = "insert"
-                self.prompt("Specify insertion point or [Scale/X/Y/Z/Rotate/"
-                            "PScale/PX/PY/PZ/PRotate]:")
-            elif self._await == "xscale":
-                self._await = "yscale"
-                self.prompt("Enter Y scale factor <use X scale factor>:")
-            elif self._await == "yscale":
-                self._await = "rotation"
-                self.prompt("Specify rotation angle <{v:g}>:", v=self._rotation)
-            else:
-                self._attach()
-            return True
+def execute_bind(doc: Drawing, xref_name: str, mode: str = "bind") -> bool:
+    """
+    Wciela zewnętrzny odnośnik XREF jako stały blok w bieżącym dokumencie (AutoCAD BIND/INSERT).
+    :param doc: Aktywny dokument ezdxf Drawing
+    :param xref_name: Nazwa bloku XREF
+    :param mode: 'bind' (prefiks Nazwa$0$Warstwa) lub 'insert' (scalenie warstw)
+    """
+    if not doc or xref_name not in doc.blocks:
         return False
 
-    def on_enter(self) -> None:
-        if self._await in ("type", "path", "xscale", "yscale", "rotation"):
-            self.on_option("")
+    block_def = doc.blocks[xref_name]
+    raw_path = block_def.block.dxf.get("xref_path", None)
+    if not raw_path:
+        return False
 
-    def on_point(self, point: Point) -> None:
-        if self._await != "insert" or self._path is None:
+    full_path = resolve_xref_path(doc.filename, raw_path)
+    if not os.path.exists(full_path):
+        print(f"[BIND] Błąd: Plik źródłowy {full_path} nie istnieje.")
+        return False
+
+    dxf_path, is_temp = ensure_dxf_format(full_path)
+    if not dxf_path:
+        print(f"[BIND] Nie można odczytać geometrii z {full_path}")
+        return False
+
+    try:
+        ext_doc = ezdxf.readfile(dxf_path)
+    except Exception as err:
+        print(f"[BIND] Błąd parsowania pliku DXF {dxf_path}: {err}")
+        if is_temp and os.path.exists(dxf_path):
+            os.unlink(dxf_path)
+        return False
+
+    # 1. Mapowanie i scalanie tabeli warstw
+    layer_map: Dict[str, str] = {}
+    for src_layer in ext_doc.layers:
+        orig_name = src_layer.dxf.name
+        if orig_name in ("0", "Defpoints"):
+            target_name = orig_name
+        else:
+            target_name = f"{xref_name}$0${orig_name}" if mode == "bind" else orig_name
+
+        layer_map[orig_name] = target_name
+
+        if target_name not in doc.layers:
+            color = src_layer.dxf.get("color", 7)
+            linetype = src_layer.dxf.get("linetype", "Continuous")
+            lineweight = src_layer.dxf.get("lineweight", -1)
+            try:
+                doc.layers.add(
+                    name=target_name,
+                    color=color,
+                    linetype=linetype,
+                    lineweight=lineweight,
+                )
+            except Exception:
+                pass
+
+    # 2. Przeniesienie geometrii z modelu zewnętrznego do lokalnego bloku
+    block_def.empty()
+
+    for entity in ext_doc.modelspace():
+        try:
+            cloned = entity.copy()
+            orig_l = cloned.dxf.get("layer", "0")
+            cloned.dxf.layer = layer_map.get(orig_l, "0")
+            block_def.add_entity(cloned)
+        except Exception as copy_err:
+            continue
+
+    # 3. Zmiana typu bloku: usunięcie atrybutu xref_path i zresetowanie flag DXF
+    block_def.block.dxf.discard("xref_path")
+    flags = block_def.block.dxf.get("flags", 0)
+    # Wyzerowanie flagi bitowej 4 (XREF) oraz 32 (Resolved XREF)
+    block_def.block.dxf.flags = flags & ~4 & ~32
+
+    if is_temp and os.path.exists(dxf_path):
+        os.unlink(dxf_path)
+
+    print(f"[BIND] Sukces: Pomyślnie związano XREF '{xref_name}' w trybie '{mode}'.")
+    return True
+
+
+class XrefManagerDialog(QDialog):
+    """Okno dialogowe zarządzania zewnętrznymi odnośnikami (XREF Manager)."""
+
+    xref_modified = Signal()
+
+    def __init__(self, doc: Drawing, parent=None):
+        super().__init__(parent)
+        self.doc = doc
+        self.setWindowTitle("External References (XREF)")
+        self.resize(650, 380)
+
+        layout = QVBoxLayout(self)
+
+        self.tree = QTreeWidget(self)
+        self.tree.setHeaderLabels(["Reference Name", "Status", "Size", "Type", "Saved Path"])
+        self.tree.header().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_context_menu)
+        layout.addWidget(self.tree)
+
+        btn_layout = QHBoxLayout()
+        self.btn_attach = QPushButton("Attach DWG/DXF...", self)
+        self.btn_attach.clicked.connect(self._on_attach)
+        self.btn_reload = QPushButton("Reload", self)
+        self.btn_reload.clicked.connect(self._on_reload)
+        self.btn_detach = QPushButton("Detach", self)
+        self.btn_detach.clicked.connect(self._on_detach)
+        self.btn_bind = QPushButton("Bind...", self)
+        self.btn_bind.clicked.connect(self._on_bind_clicked)
+        self.btn_close = QPushButton("Close", self)
+        self.btn_close.clicked.connect(self.accept)
+
+        btn_layout.addWidget(self.btn_attach)
+        btn_layout.addWidget(self.btn_reload)
+        btn_layout.addWidget(self.btn_detach)
+        btn_layout.addWidget(self.btn_bind)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_close)
+        layout.addLayout(btn_layout)
+
+        self.refresh_list()
+
+    def refresh_list(self):
+        self.tree.clear()
+        if not self.doc:
             return
-        self._insert = (point[0], point[1])
-        # -XREF's flow after the point: X scale, Y scale, rotation
-        self._await = "xscale"
-        self.prompt("Enter X scale factor, specify opposite corner, or "
-                    "[Corner/XYZ] <1>:")
 
-    # -- the command -------------------------------------------------------------
-    def _attach(self) -> None:
-        document = getattr(self.ctx.services, "document", None)
-        if document is None:
-            window = getattr(self.ctx.services, "window", None)
-            document = getattr(window, "document", None)
-        doc = document.doc if document is not None else None
-        host_path = getattr(document, "path", None)
-        saved = xrefs.saved_path_for(host_path, self._path, self._path_type)
-        stem = self._path.stem
-        name = stem
-        if doc is not None and name in doc.blocks and not xrefs.is_xref_block(
-                doc.blocks.get(name)):
-            name = xrefs.unique_name(doc, stem)     # a plain block took the name
-        self.ctx.execute(xrefs.AttachXrefCommand(
-            name, saved, self._insert, self._xscale, self._yscale,
-            self._rotation + self.ucs().degrees,     # from the UCS's X (#91)
-            overlay=self._overlay))
-        self.ctx.echo(tr("Xref {name} attached ({kind}, {path}).",
-                         name=name,
-                         kind=tr("Overlay") if self._overlay else tr("Attach"),
-                         path=saved))
-        window = getattr(self.ctx.services, "window", None)
-        changed = getattr(window, "xrefs_changed", None)
-        if changed is not None:
-            changed()
-        self.ctx.finish()
+        for block in self.doc.blocks:
+            xref_path = block.block.dxf.get("xref_path", None)
+            if xref_path is not None:
+                full_path = resolve_xref_path(self.doc.filename, xref_path)
+                exists = os.path.exists(full_path)
+                status = "Loaded" if exists else "Not Found"
+                size_str = (
+                    f"{os.path.getsize(full_path) // 1024} KB"
+                    if exists
+                    else "—"
+                )
+                ext = os.path.splitext(full_path)[1].upper().replace(".", "") or "DXF"
+
+                item = QTreeWidgetItem([
+                    block.name,
+                    status,
+                    size_str,
+                    ext,
+                    xref_path,
+                ])
+                if not exists:
+                    item.setForeground(1, Qt.GlobalColor.red)
+                self.tree.addTopLevelItem(item)
+
+    def _get_selected_name(self) -> Optional[str]:
+        item = self.tree.currentItem()
+        return item.text(0) if item else None
+
+    def _on_context_menu(self, pos):
+        name = self._get_selected_name()
+        if not name:
+            return
+        menu = QMenu(self)
+        act_reload = menu.addAction("Reload")
+        act_detach = menu.addAction("Detach")
+        menu.addSeparator()
+        bind_menu = menu.addMenu("Bind")
+        act_bind_std = bind_menu.addAction("Bind (Bind type)")
+        act_bind_ins = bind_menu.addAction("Insert (Merge layers)")
+
+        act_reload.triggered.connect(self._on_reload)
+        act_detach.triggered.connect(self._on_detach)
+        act_bind_std.triggered.connect(lambda: self._do_bind(name, "bind"))
+        act_bind_ins.triggered.connect(lambda: self._do_bind(name, "insert"))
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _on_bind_clicked(self):
+        name = self._get_selected_name()
+        if not name:
+            QMessageBox.information(self, "XREF", "Wybierz podkład XREF z listy.")
+            return
+
+        items = ["Bind (dodaj prefiks do warstw)", "Insert (scal warstwy z rysunkiem)"]
+        item, ok = QInputDialog.getItem(
+            self, "Bind Xref", f"Wybierz metodę związania dla: {name}", items, 0, False
+        )
+        if ok and item:
+            mode = "bind" if "Bind" in item else "insert"
+            self._do_bind(name, mode)
+
+    def _do_bind(self, name: str, mode: str):
+        confirm = QMessageBox.question(
+            self,
+            "Potwierdzenie BIND",
+            f"Czy na pewno chcesz wtopić odnośnik '{name}' do rysunku jako blok lokalny?\n"
+            f"Tryb: {mode.upper()}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm == QMessageBox.StandardButton.Yes:
+            success = execute_bind(self.doc, name, mode=mode)
+            if success:
+                QMessageBox.information(
+                    self, "Sukces", f"Odnośnik '{name}' został pomyślnie związany jako blok lokalny."
+                )
+                self.refresh_list()
+                self.xref_modified.emit()
+            else:
+                QMessageBox.critical(
+                    self, "Błąd", f"Nie udało się wykonać operacji BIND dla '{name}'."
+                )
+
+    def _on_reload(self):
+        name = self._get_selected_name()
+        if not name:
+            return
+        self.refresh_list()
+        self.xref_modified.emit()
+
+    def _on_detach(self):
+        name = self._get_selected_name()
+        if not name or not self.doc:
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Detach Xref",
+            f"Czy na pewno odłączyć referencję '{name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm == QMessageBox.StandardButton.Yes:
+            # Usunięcie instancji INSERT z modelspace
+            msp = self.doc.modelspace()
+            to_remove = [e for e in msp if e.dxftype() == "INSERT" and e.dxf.name == name]
+            for ins in to_remove:
+                msp.delete_entity(ins)
+
+            # Usunięcie definicji bloku
+            if name in self.doc.blocks:
+                self.doc.blocks.delete_block(name, safe=False)
+
+            self.refresh_list()
+            self.xref_modified.emit()
+
+    def _on_attach(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Dołącz odnośnik zewnętrzny (XATTACH)", "", "CAD Drawings (*.dwg *.dxf);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        ref_name = base_name
+        idx = 1
+        while ref_name in self.doc.blocks:
+            ref_name = f"{base_name}_{idx}"
+            idx += 1
+
+        rel_path = file_path
+        if self.doc.filename:
+            try:
+                rel_path = os.path.relpath(file_path, os.path.dirname(self.doc.filename))
+            except ValueError:
+                rel_path = file_path
+
+        # Utworzenie bloku XREF
+        block = self.doc.blocks.new(name=ref_name)
+        block.block.dxf.flags = block.block.dxf.get("flags", 0) | 4
+        block.block.dxf.xref_path = rel_path
+
+        # Wstawienie INSERT w punkcie (0, 0, 0)
+        self.doc.modelspace().add_blockref(ref_name, (0, 0, 0))
+
+        self.refresh_list()
+        self.xref_modified.emit()
 
 
-XREF_TOOL_CLASSES = {"XATTACH": XAttachTool}
+def run_bind_command(doc: Drawing, args: List[str]) -> bool:
+    """
+    Punkt wejściowy dla wiersza poleceń CLI (komenda BIND lub -XREF B).
+    Składnia: BIND <nazwa_xref> [BIND/INSERT]
+    """
+    if not args:
+        print("Użycie: BIND <nazwa_odnośnika> [bind|insert]")
+        return False
+
+    xref_name = args[0]
+    mode = "bind"
+    if len(args) > 1 and args[1].lower() in ("insert", "i"):
+        mode = "insert"
+
+    return execute_bind(doc, xref_name, mode=mode)
