@@ -17,8 +17,7 @@ if sys.platform == "win32":
     os.environ["QT_API"] = "pyside6"
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
 # -----------------------------------------------------------
-import os
-import sys
+
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
