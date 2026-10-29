@@ -16,6 +16,8 @@ Navigation (AutoCAD-like):
 from __future__ import annotations
 
 import math
+import time
+
 from pathlib import Path
 from typing import Optional
 
@@ -247,6 +249,8 @@ class Viewport(QOpenGLWidget):
         self._cursor: Optional[QPointF] = None
         self._panning = False
         self._pan_last_screen = None
+        self._last_snap_time = 0.0
+        self._snap_interval = 0.033  # ograniczenie do maks. ~30 przeliczeń na sekundę
         #: The cursor the CANVAS paints -- None for the crosshair, or
         #: "open_hand" / "closed_hand" / "cross". The OS pointer stays
         #: blank over the canvas at all times: a system cursor over a GL
@@ -2344,6 +2348,10 @@ class Viewport(QOpenGLWidget):
         # widget, outside the window), the release never arrives and the
         # drag would stick to the cursor forever — Esc included, since it
         # goes to the editor. No button down = no pan.
+        current_time = time.monotonic()
+    if current_time - self._last_snap_time >= self._snap_interval:
+    self._last_snap_time = current_time
+    # tutaj pozostaw dotychczasowe wywołanie funkcji szukania punktów OSNAP
         if self._panning and not (event.buttons()
                                   & (Qt.MiddleButton | Qt.LeftButton)):
             self._panning = False
