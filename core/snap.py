@@ -105,13 +105,8 @@ class SnapEngine:
         self._seg_bounds = np.empty((0, 4))
         self._circles = np.empty((0, 3))  # cx cy r (full circles)
         self._circle_oidx = np.empty(0, dtype=np.int32)
-        self._circle_bounds = np.empty((0, 4))
         self._arcs = np.empty((0, 5))     # cx cy r a0 a1 (ccw radians)
         self._arc_oidx = np.empty(0, dtype=np.int32)
-        self._arc_bounds = np.empty((0, 4))
-        self._grid: Optional[dict[tuple[int, int], np.ndarray]] = None
-        self._large_segs: Optional[np.ndarray] = None
-        self._grid_cell_size: float = 0.0
         self._points = np.empty((0, 2))   # NOD targets
         self._point_oidx = np.empty(0, dtype=np.int32)
         # Chords of ELLIPSE/SPLINE: read by NEA, PER and INT only.
@@ -458,92 +453,6 @@ class SnapEngine:
             np.maximum(segs[:, 1], segs[:, 3]),
         ))
 
-    @staticmethod
-    def _circle_bounds_of(circles: np.ndarray) -> np.ndarray:
-        if not len(circles):
-            return np.empty((0, 4))
-        cx, cy, r = circles[:, 0], circles[:, 1], circles[:, 2]
-        return np.column_stack((cx - r, cy - r, cx + r, cy + r))
-
-    @staticmethod
-    def _arc_bounds_of(arcs: np.ndarray) -> np.ndarray:
-        if not len(arcs):
-            return np.empty((0, 4))
-        cx, cy, r = arcs[:, 0], arcs[:, 1], arcs[:, 2]
-        return np.column_stack((cx - r, cy - r, cx + r, cy + r))
-
-    def _build_spatial_index(self) -> None:
-        """Construct a 2D spatial hash grid for high-speed O(1) OSNAP segment filtering."""
-        n = len(self._segs)
-        if n < 500:
-            self._grid = None
-            self._large_segs = None
-            return
-        b = self._seg_bounds
-        min_x = float(b[:, 0].min())
-        min_y = float(b[:, 1].min())
-        max_x = float(b[:, 2].max())
-        max_y = float(b[:, 3].max())
-        extent = max(max_x - min_x, max_y - min_y, 1.0)
-        cell_size = max(extent / 128.0, 1e-4)
-        self._grid_cell_size = cell_size
-
-        grid: dict[tuple[int, int], list[int]] = {}
-        large: list[int] = []
-
-        gx0_all = np.floor(b[:, 0] / cell_size).astype(np.int32)
-        gy0_all = np.floor(b[:, 1] / cell_size).astype(np.int32)
-        gx1_all = np.floor(b[:, 2] / cell_size).astype(np.int32)
-        gy1_all = np.floor(b[:, 3] / cell_size).astype(np.int32)
-
-        span_x = gx1_all - gx0_all
-        span_y = gy1_all - gy0_all
-
-        for i in range(n):
-            sx = int(span_x[i])
-            sy = int(span_y[i])
-            if sx > 4 or sy > 4:
-                large.append(i)
-                continue
-            x0 = int(gx0_all[i])
-            y0 = int(gy0_all[i])
-            for gx in range(x0, x0 + sx + 1):
-                for gy in range(y0, y0 + sy + 1):
-                    grid.setdefault((gx, gy), []).append(i)
-
-        self._grid = {k: np.array(v, dtype=np.int32) for k, v in grid.items()}
-        self._large_segs = np.array(large, dtype=np.int32) if large else np.empty(0, dtype=np.int32)
-
-    def _candidate_segs(self, cx: float, cy: float, threshold: float):
-        """Retrieve candidate segments within aperture reach using spatial grid acceleration."""
-        if not len(self._segs):
-            return np.empty((0, 4)), np.empty(0, dtype=np.int32)
-        if self._grid is not None and len(self._segs) >= 500:
-            cs = self._grid_cell_size
-            gx0 = int(math.floor((cx - threshold) / cs))
-            gx1 = int(math.floor((cx + threshold) / cs))
-            gy0 = int(math.floor((cy - threshold) / cs))
-            gy1 = int(math.floor((cy + threshold) / cs))
-            cands = []
-            if self._large_segs is not None and len(self._large_segs):
-                cands.append(self._large_segs)
-            for gx in range(gx0, gx1 + 1):
-                for gy in range(gy0, gy1 + 1):
-                    arr = self._grid.get((gx, gy))
-                    if arr is not None:
-                        cands.append(arr)
-            if cands:
-                cand_idx = np.unique(np.concatenate(cands)) if len(cands) > 1 else cands[0]
-                b = self._seg_bounds[cand_idx]
-                near = ((b[:, 0] - threshold <= cx) & (b[:, 2] + threshold >= cx)
-                        & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
-                return self._segs[cand_idx[near]], self._seg_oidx[cand_idx[near]]
-            return np.empty((0, 4)), np.empty(0, dtype=np.int32)
-        b = self._seg_bounds
-        near = ((b[:, 0] - threshold <= cx) & (b[:, 2] + threshold >= cx)
-                & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
-        return self._segs[near], self._seg_oidx[near]
-
     def _xref_children(self, e, oid, segs, seg_o, circles, circle_o,
                        arcs, arc_o, points, point_o, curves, curve_o,
                        targets, target_o) -> bool:
@@ -775,9 +684,7 @@ class SnapEngine:
         self._seg_bounds = self._seg_bounds_of(self._segs)
         self._circles, self._circle_oidx = self._merged(
             "circles", circles, circle_o, 3)
-        self._circle_bounds = self._circle_bounds_of(self._circles)
         self._arcs, self._arc_oidx = self._merged("arcs", arcs, arc_o, 5)
-        self._arc_bounds = self._arc_bounds_of(self._arcs)
         self._points, self._point_oidx = self._merged(
             "points", points, point_o, 2)
         self._curves, self._curve_oidx = self._merged(
@@ -786,7 +693,6 @@ class SnapEngine:
         self._targets, self._target_oidx = self._merged(
             "targets", targets, target_o, 3)
         self._chunks = None
-        self._build_spatial_index()
         self._dirty = False
 
     def add_entities(self, entities) -> None:
@@ -845,13 +751,11 @@ class SnapEngine:
                  np.asarray(circles, dtype=np.float64).reshape(-1, 3)])
             self._circle_oidx = np.concatenate(
                 [self._circle_oidx, np.asarray(circle_o, dtype=np.int32)])
-            self._circle_bounds = self._circle_bounds_of(self._circles)
         if arcs:
             self._arcs = np.vstack(
                 [self._arcs, np.asarray(arcs, dtype=np.float64).reshape(-1, 5)])
             self._arc_oidx = np.concatenate(
                 [self._arc_oidx, np.asarray(arc_o, dtype=np.int32)])
-            self._arc_bounds = self._arc_bounds_of(self._arcs)
         if points:
             self._points = np.vstack(
                 [self._points,
@@ -905,12 +809,6 @@ class SnapEngine:
                 arr = getattr(self, arr_name)
                 arr[m, 0] += dx
                 arr[m, 1] += dy
-        if len(self._circle_bounds):
-            self._circle_bounds += np.array([dx, dy, dx, dy])
-        if len(self._arc_bounds):
-            self._arc_bounds += np.array([dx, dy, dx, dy])
-        if self._grid is not None:
-            self._build_spatial_index()
 
     def remove_handles(self, handles) -> None:
         """Drop the snap geometry of erased/modified entities (no rebuild).
@@ -929,8 +827,6 @@ class SnapEngine:
             self._segs = self._segs[keep]
             self._seg_oidx = self._seg_oidx[keep]
             self._seg_bounds = self._seg_bounds[keep]
-            if self._grid is not None:
-                self._build_spatial_index()
         keep = ~np.isin(self._curve_oidx, ids)
         if not keep.all():
             self._curves = self._curves[keep]
@@ -948,10 +844,6 @@ class SnapEngine:
             if not k.all():
                 setattr(self, arr_name, getattr(self, arr_name)[k])
                 setattr(self, oidx_name, oidx[k])
-                if arr_name == "_circles":
-                    self._circle_bounds = self._circle_bounds_of(self._circles)
-                elif arr_name == "_arcs":
-                    self._arc_bounds = self._arc_bounds_of(self._arcs)
 
     # -- query ----------------------------------------------------------------
     # -- tracking sources: Extension and Parallel ---------------------------
@@ -1002,7 +894,12 @@ class SnapEngine:
         lines, _, _ = self._near_lines(cx, cy, threshold)
         if len(lines):
             return (float(lines[0, 2]), float(lines[0, 3]))
-        segs, _ = self._candidate_segs(cx, cy, threshold)
+        if not len(self._segs):
+            return None
+        b = self._seg_bounds
+        near = ((b[:, 0] - threshold <= cx) & (b[:, 2] + threshold >= cx)
+                & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
+        segs = self._segs[near]
         if not len(segs):
             return None
         dx, dy = segs[:, 2] - segs[:, 0], segs[:, 3] - segs[:, 1]
@@ -1052,9 +949,16 @@ class SnapEngine:
 
         circles, arcs, points = self._circles, self._arcs, self._points
 
-        # Spatial grid selects the segments near the cursor in O(1) time; every snap
+        # ONE bounds pass selects the segments near the cursor; every snap
         # kind below works on those candidates only.
-        segs, seg_oids = self._candidate_segs(cx, cy, threshold)
+        segs = np.empty((0, 4))
+        seg_oids = np.empty(0, dtype=np.int32)
+        if len(self._segs):
+            b = self._seg_bounds
+            near = ((b[:, 0] - threshold <= cx) & (b[:, 2] + threshold >= cx)
+                    & (b[:, 1] - threshold <= cy) & (b[:, 3] + threshold >= cy))
+            segs = self._segs[near]
+            seg_oids = self._seg_oidx[near]
         if drawn:
             extra = np.asarray(drawn, dtype=float).reshape(-1, 4)
             lo_x = np.minimum(extra[:, 0], extra[:, 2])
@@ -1106,18 +1010,10 @@ class SnapEngine:
                 d2 = (exy[:, 0] - cx) ** 2 + (exy[:, 1] - cy) ** 2
                 i = int(np.argmin(d2))
                 offer("END", exy[i, 0], exy[i, 1])
-        near_arcs = np.empty((0, 5))
-        if len(arcs) and len(self._arc_bounds):
-            ab = self._arc_bounds
-            near_arc_mask = ((ab[:, 0] - threshold <= cx) & (ab[:, 2] + threshold >= cx)
-                             & (ab[:, 1] - threshold <= cy) & (ab[:, 3] + threshold >= cy))
-            if near_arc_mask.any():
-                near_arcs = arcs[near_arc_mask]
-
-        if "END" in kinds and len(near_arcs):
+        if "END" in kinds and len(arcs):
             for a_idx in (3, 4):
-                ex = near_arcs[:, 0] + near_arcs[:, 2] * np.cos(near_arcs[:, a_idx])
-                ey = near_arcs[:, 1] + near_arcs[:, 2] * np.sin(near_arcs[:, a_idx])
+                ex = arcs[:, 0] + arcs[:, 2] * np.cos(arcs[:, a_idx])
+                ey = arcs[:, 1] + arcs[:, 2] * np.sin(arcs[:, a_idx])
                 d2 = (ex - cx) ** 2 + (ey - cy) ** 2
                 i = int(np.argmin(d2))
                 offer("END", float(ex[i]), float(ey[i]))
@@ -1129,45 +1025,41 @@ class SnapEngine:
             i = int(np.argmin(d2))
             offer("MID", float(mx[i]), float(my[i]))
         offer_targets("MID")
-        if "MID" in kinds and len(near_arcs):
+        if "MID" in kinds and len(arcs):
             # An arc's midpoint is on the arc, not on its chord.
-            amid = (near_arcs[:, 3] + near_arcs[:, 4]) / 2.0
-            mx = near_arcs[:, 0] + near_arcs[:, 2] * np.cos(amid)
-            my = near_arcs[:, 1] + near_arcs[:, 2] * np.sin(amid)
+            amid = (arcs[:, 3] + arcs[:, 4]) / 2.0
+            mx = arcs[:, 0] + arcs[:, 2] * np.cos(amid)
+            my = arcs[:, 1] + arcs[:, 2] * np.sin(amid)
             d2 = (mx - cx) ** 2 + (my - cy) ** 2
             i = int(np.argmin(d2))
             offer("MID", float(mx[i]), float(my[i]))
         if "CEN" in kinds:
             for arr in (circles, arcs):
                 if len(arr):
-                    dx = arr[:, 0] - cx
-                    dy = arr[:, 1] - cy
-                    near_c = np.nonzero((np.abs(dx) <= threshold) & (np.abs(dy) <= threshold))[0]
-                    for idx in near_c:
-                        offer("CEN", float(arr[idx, 0]), float(arr[idx, 1]))
+                    d2 = (arr[:, 0] - cx) ** 2 + (arr[:, 1] - cy) ** 2
+                    i = int(np.argmin(d2))
+                    offer("CEN", float(arr[i, 0]), float(arr[i, 1]))
         offer_targets("CEN")
         offer_targets("GCE")
         offer_targets("INS")
         offer_targets("QUA")
         if "QUA" in kinds:
-            for arr, bounds_arr, full in ((circles, self._circle_bounds, True),
-                                          (arcs, self._arc_bounds, False)):
-                if not len(arr) or not len(bounds_arr):
+            # The four compass points of a circle, and of an arc when the
+            # sweep actually reaches them. Vectorized per compass point: a
+            # Python loop over every circle in the drawing cost 3 ms per
+            # mouse move on a plan with a thousand of them.
+            for arr, full in ((circles, True), (arcs, False)):
+                if not len(arr):
                     continue
-                q_mask = ((bounds_arr[:, 0] - threshold <= cx) & (bounds_arr[:, 2] + threshold >= cx)
-                          & (bounds_arr[:, 1] - threshold <= cy) & (bounds_arr[:, 3] + threshold >= cy))
-                if not q_mask.any():
-                    continue
-                cand_arr = arr[q_mask]
                 for step in range(4):
                     ang = step * math.pi / 2.0
-                    qx = cand_arr[:, 0] + cand_arr[:, 2] * math.cos(ang)
-                    qy = cand_arr[:, 1] + cand_arr[:, 2] * math.sin(ang)
+                    qx = arr[:, 0] + arr[:, 2] * math.cos(ang)
+                    qy = arr[:, 1] + arr[:, 2] * math.sin(ang)
                     hits = np.nonzero((np.abs(qx - cx) <= threshold)
                                       & (np.abs(qy - cy) <= threshold))[0]
                     for i in hits:
                         if not full and not _angle_in_sweep(
-                                ang, cand_arr[i, 3], cand_arr[i, 4]):
+                                ang, arr[i, 3], arr[i, 4]):
                             continue
                         offer("QUA", float(qx[i]), float(qy[i]))
         if "TAN" in kinds and from_point is not None:

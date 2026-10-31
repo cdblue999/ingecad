@@ -86,6 +86,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.7.2" date="2026-10-31">
+      <description>
+        <p>Fix drawing opening regressions: eliminate recursive XREF deep copy explosion, patch ezdxf font_face None handling to prevent MTEXT rendering crashes, restore fast single-pass handle deduplication, and ensure instant scene loading.</p>
+        <p xml:lang="es">Corrección de apertura de planos: elimina la duplicación recursiva de XREFs, corrige el manejo de fuentes nulas en MTEXT para evitar errores de renderizado y restaura la carga rápida de escenas.</p>
+      </description>
+    </release>
     <release version="0.7.1" date="2026-10-31">
       <description>
         <p>Optimized Linux release (IngeCAD_opt): 144Hz+ high-refresh viewport tracking, multi-tier nested architectural XREFs (depth up to 8) with attachment and overlay propagation, 2D Spatial Hash Grid for sub-millisecond OSNAP queries on 100k+ primitives, single-pass DWG/DXF stream sanitization, and Wayland/X11 driver fallback.</p>

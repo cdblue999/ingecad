@@ -23,6 +23,7 @@ def apply() -> None:
     if _APPLIED:
         return
     _APPLIED = True
+    _patch_font_none_handling()
     _patch_polygon_transform()
     _patch_mtext_mask_rendering()
     _patch_exact_family_fonts()
@@ -1534,3 +1535,49 @@ def _patch_linetype_dots() -> None:
     draw_line._ingecad_patch = True
     LinetypeStage2d.draw_line = draw_line
     LinetypeStage2d.draw_path = draw_path
+
+
+def _patch_font_none_handling() -> None:
+    """ezdxf's FontManager, FontCache, and UnifiedTextRenderer crash with
+    AttributeError: 'NoneType' object has no attribute 'filename' when an
+    MTEXT or entity has a missing or None font_face. Safe fallback ensures
+    all text renders without failure."""
+    from ezdxf.fonts import font_manager
+    orig_find_font_name = font_manager.FontManager.find_font_name
+
+    def find_font_name(self, font_face):
+        if font_face is None:
+            return self.fallback_font_name()
+        try:
+            return orig_find_font_name(self, font_face)
+        except (AttributeError, TypeError):
+            return self.fallback_font_name()
+
+    font_manager.FontManager.find_font_name = find_font_name
+
+    orig_find_best_match = font_manager.FontCache.find_best_match
+
+    def find_best_match(self, font_face):
+        if font_face is None:
+            return None
+        try:
+            return orig_find_best_match(self, font_face)
+        except (AttributeError, TypeError):
+            return None
+
+    font_manager.FontCache.find_best_match = find_best_match
+
+    try:
+        from ezdxf.addons.drawing.unified_text_renderer import UnifiedTextRenderer
+        orig_get_font = UnifiedTextRenderer.get_font
+
+        def get_font(self, font_face):
+            if font_face is None:
+                from ezdxf.fonts import fonts
+                font_face = fonts.font_manager.get_font_face(fonts.font_manager.fallback_font_name())
+            return orig_get_font(self, font_face)
+
+        UnifiedTextRenderer.get_font = get_font
+    except Exception:
+        pass
+
