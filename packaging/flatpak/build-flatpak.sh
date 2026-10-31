@@ -19,8 +19,17 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APPID="org.ingecad.IngeCAD_opt"
-STATE_DIR="$HERE/.flatpak-builder"
-BUILD_DIR="$HERE/.staging/build"
+
+# If the source tree is on a noexec filesystem (e.g. NTFS/FAT mounts),
+# build tools and ./configure scripts fail with Permission Denied.
+# Fall back to ~/.cache for build and state dirs when noexec is detected.
+if findmnt -n -o OPTIONS -T "$HERE" 2>/dev/null | grep -qw "noexec"; then
+  DEFAULT_BASE="$HOME/.cache/flatpak-$APPID"
+else
+  DEFAULT_BASE="$HERE"
+fi
+STATE_DIR="${FLATPAK_BUILDER_STATE_DIR:-${DEFAULT_BASE}/.flatpak-builder}"
+BUILD_DIR="${FLATPAK_BUILDER_BUILD_DIR:-${DEFAULT_BASE}/.staging/build}"
 
 # flatpak-builder is usually NOT installed natively here — it is the
 # org.flatpak.Builder Flatpak. Calling `flatpak-builder` directly therefore
