@@ -86,6 +86,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.7.1" date="2026-10-31">
+      <description>
+        <p>Optimized Linux release (IngeCAD_opt): 144Hz+ high-refresh viewport tracking, multi-tier nested architectural XREFs (depth up to 8) with attachment and overlay propagation, 2D Spatial Hash Grid for sub-millisecond OSNAP queries on 100k+ primitives, single-pass DWG/DXF stream sanitization, and Wayland/X11 driver fallback.</p>
+        <p xml:lang="es">Versión optimizada para Linux (IngeCAD_opt): seguimiento del visor a alta frecuencia de refresco (144Hz+), referencias externas (XREF) anidadas multinivel (hasta profundidad 8) con propagación de enlaces y superposiciones, cuadrícula espacial 2D para referencias a objetos (OSNAP) en menos de un milisegundo sobre más de 100 000 primitivas, saneamiento de flujo DWG/DXF en una sola pasada y compatibilidad de controladores Wayland/X11.</p>
+      </description>
+    </release>
     <release version="0.6.8.2" date="2026-10-21">
       <description>
         <p>Plot opens again in a layout whose page setup uses a scale outside the list.</p>
