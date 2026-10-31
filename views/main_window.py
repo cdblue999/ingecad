@@ -3991,10 +3991,10 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                     f"{tr('Overlay') if ref.overlay else tr('Attach')}  {ref.path}")
             return self._cmd_xref_cli()
         if option in ("B", "BIND"):
-            self.command_line.echo(
-                tr("Bind is not available yet: the referenced drawing stays "
-                   "external. Detach, or insert the file as a block."))
-            return self._cmd_xref_cli()
+            return Prompt(
+                tr("Enter Bind type [Bind/Insert] <Bind>:"),
+                self._xref_bind_type,
+            )
         if option in ("D", "DETACH"):
             return Prompt(tr("Enter xref name(s) to detach:"), self._xref_detach)
         if option in ("P", "PATH"):
@@ -4013,6 +4013,31 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         if not names:
             self.command_line.echo(tr("No matching xref names."))
         return names
+
+    def _xref_bind_type(self, text: str) -> Prompt | None:
+        mode = "insert" if text.strip().upper().startswith("I") else "bind"
+        return Prompt(
+            tr("Enter xref name(s) to bind:"),
+            lambda names, m=mode: self._xref_bind_names(names, m),
+        )
+
+    def _xref_bind_names(self, text: str, mode: str) -> None:
+        from core import xrefs
+
+        names = self._xref_names(text)
+        if not names:
+            return
+        for name in names:
+            try:
+                self.tools._execute(xrefs.BindXrefCommand(name, mode=mode))
+                self.command_line.echo(
+                    tr("Xref {name} bound ({mode}).", name=name, mode=mode.capitalize())
+                )
+            except Exception as e:
+                self.command_line.echo(
+                    tr("Failed to bind xref {name}: {error}", name=name, error=e)
+                )
+        self.xrefs_changed()
 
     def _xref_detach(self, text: str) -> None:
         from core import xrefs
@@ -4344,6 +4369,8 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         d.register("XREF", lambda *a: self.toggle_xrefs_panel())
         d.register("EXTERNALREFERENCES", lambda *a: self.toggle_xrefs_panel())
         d.register("-XREF", self._cmd_xref_cli)
+        d.register("BIND", lambda *a: self.tools.start_tool("BIND"))
+        d.register("XBIND", lambda *a: self.tools.start_tool("XBIND"))
         d.register("CLEANSCREENON", lambda *a: self._clean_screen(True))
         d.register("CLEANSCREENOFF", lambda *a: self._clean_screen(False))
         d.register("LAYON", lambda *a: self._cmd_layon())

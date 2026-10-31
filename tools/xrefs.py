@@ -186,121 +186,77 @@ def execute_bind(doc, xref_name: str, mode: str = "bind") -> bool:
     :param xref_name: Name of the XREF block
     :param mode: 'bind' (prefix Name$0$Layer) or 'insert' (merge layers)
     """
-    import ezdxf
-
-    if not doc or xref_name not in doc.blocks:
-        return False
-
-    block_def = doc.blocks[xref_name]
-    raw_path = block_def.block.dxf.get("xref_path", None)
-    if not raw_path:
-        return False
-
-    host_path = Path(doc.filename) if getattr(doc, "filename", None) else None
-    resolved = xrefs.resolve_path(host_path, str(raw_path))
-    if not resolved or not resolved.is_file():
-        return False
-
+    document = getattr(doc, "_ingecad_document", None)
+    if document is None:
+        from core.document import Document
+        document = Document(doc)
+    cmd = xrefs.BindXrefCommand(xref_name, mode=mode)
     try:
-        if resolved.suffix.lower() == ".dwg":
-            from formats.dwg_bridge import load_dwg
-            ext_doc = load_dwg(resolved).doc
-        else:
-            ext_doc = ezdxf.readfile(str(resolved))
+        cmd.do(document)
+        return True
     except Exception:
         return False
 
-    # 1. Map and merge layers
-    layer_map: dict[str, str] = {}
-    for src_layer in ext_doc.layers:
-        orig_name = src_layer.dxf.name
-        if orig_name in ("0", "Defpoints"):
-            target_name = orig_name
-        else:
-            target_name = f"{xref_name}$0${orig_name}" if mode == "bind" else orig_name
-
-        layer_map[orig_name] = target_name
-
-        if target_name not in doc.layers:
-            color = src_layer.dxf.get("color", 7)
-            linetype = src_layer.dxf.get("linetype", "Continuous")
-            lineweight = src_layer.dxf.get("lineweight", -1)
-            try:
-                doc.layers.add(
-                    name=target_name,
-                    color=color,
-                    linetype=linetype,
-                    lineweight=lineweight,
-                )
-            except Exception:
-                pass
-
-    # 2. Transfer geometry from external modelspace to local block
-    block_def.empty()
-    for entity in ext_doc.modelspace():
-        try:
-            cloned = entity.copy()
-            orig_l = cloned.dxf.get("layer", "0")
-            cloned.dxf.layer = layer_map.get(orig_l, "0")
-            block_def.add_entity(cloned)
-        except Exception:
-            continue
-
-    # 3. Discard xref_path and clear XREF and OVERLAY flags
-    block_def.block.dxf.discard("xref_path")
-    flags = block_def.block.dxf.get("flags", 0)
-    block_def.block.dxf.flags = flags & ~xrefs.BLK_XREF & ~xrefs.BLK_XREF_OVERLAY & ~32
-    return True
-
 
 class BindTool(Tool):
-    """BIND: bind an external reference into the current drawing."""
+    """BIND / XBIND: bind an external reference into the current drawing."""
 
     def start(self) -> None:
         self.name = "BIND"
         self._name = ""
         self._mode = "bind"
-        self._await = "name"
-        self.prompt("Enter name of xref to bind:")
+        self._await = "type"
+        self.prompt(tr("Enter Bind type [Bind/Insert] <Bind>:"))
 
     def wants_raw_text(self) -> bool:
         return True
 
     def on_option(self, text: str) -> bool:
         text = text.strip()
+        if self._await == "type":
+            self._mode = "insert" if text.upper().startswith("I") else "bind"
+            self._await = "name"
+            self.prompt(tr("Enter name of xref to bind (or * for all):"))
+            return True
         if self._await == "name":
             if not text:
                 self.ctx.finish()
                 return True
             document = getattr(self.ctx.services, "document", None)
-            doc = document.doc if document is not None else None
-            if doc is None or text not in doc.blocks or not xrefs.is_xref_block(doc.blocks.get(text)):
-                self.ctx.echo(tr("Xref {name} not found.", name=text))
+            if document is None or document.doc is None:
                 self.ctx.finish()
                 return True
-            self._name = text
-            self._await = "mode"
-            self.prompt("Enter Bind type [Bind/Insert] <Bind>:")
-            return True
-        if self._await == "mode":
-            mode = "insert" if text.upper().startswith("I") else "bind"
-            document = getattr(self.ctx.services, "document", None)
-            doc = document.doc if document is not None else None
-            if doc and execute_bind(doc, self._name, mode=mode):
-                self.ctx.echo(tr("Xref {name} bound successfully.", name=self._name))
+            matched = xrefs.match_names(document, text)
+            if not matched:
+                self.ctx.echo(tr("No matching xref names."))
+                self.ctx.finish()
+                return True
+            success_count = 0
+            for name in matched:
+                try:
+                    self.ctx.execute(xrefs.BindXrefCommand(name, mode=self._mode))
+                    self.ctx.echo(
+                        tr("Xref {name} bound ({mode}).", name=name, mode=self._mode.capitalize())
+                    )
+                    success_count += 1
+                except Exception as exc:
+                    self.ctx.echo(
+                        tr("Failed to bind xref {name}: {error}", name=name, error=exc)
+                    )
+            if success_count > 0:
                 window = getattr(self.ctx.services, "window", None)
                 changed = getattr(window, "xrefs_changed", None)
                 if changed is not None:
                     changed()
-            else:
-                self.ctx.echo(tr("Failed to bind xref {name}.", name=self._name))
             self.ctx.finish()
             return True
         return False
 
     def on_enter(self) -> None:
-        if self._await == "mode":
+        if self._await == "type":
             self.on_option("Bind")
+        elif self._await == "name":
+            self.ctx.finish()
 
 
-XREF_TOOL_CLASSES = {"XATTACH": XAttachTool, "BIND": BindTool}
+XREF_TOOL_CLASSES = {"XATTACH": XAttachTool, "BIND": BindTool, "XBIND": BindTool}

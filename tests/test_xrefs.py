@@ -519,3 +519,80 @@ def test_browsing_to_a_block_already_defined_asks_to_redefine(qapp, tmp_path,
     finally:
         win.document.dirty = False
         win.close()
+
+
+def test_xref_bind_standard_mode(tmp_path):
+    """AutoCAD BIND mode: converts xref into local block with $0$ namespacing."""
+    _referenced(tmp_path)
+    host_path = _host(tmp_path)
+    document = Document.load(host_path)
+    doc = document.doc
+
+    block = doc.blocks.get("topo")
+    assert xrefs.is_xref_block(block)
+
+    cmd = xrefs.BindXrefCommand("topo", mode="bind")
+    cmd.do(document)
+
+    # 1. Block is now a regular internal block
+    assert not xrefs.is_xref_block(block)
+    assert not block.block.dxf.hasattr("xref_path")
+    assert len(list(block)) == 3
+
+    # 2. Dependent symbols namespaced with topo$0$...
+    assert "topo$0$WALLS" in doc.layers
+    assert "topo$0$MH" in doc.blocks
+
+    # 3. Undo restores XREF state and cleans up imported symbols
+    cmd.undo(document)
+    assert xrefs.is_xref_block(block)
+    assert block.block.dxf.get("xref_path") == "topo.dxf"
+    assert len(list(block)) == 0
+    assert "topo$0$WALLS" not in doc.layers
+    assert "topo$0$MH" not in doc.blocks
+
+    # 4. Redo
+    cmd.do(document)
+    assert not xrefs.is_xref_block(block)
+    assert "topo$0$WALLS" in doc.layers
+
+
+def test_xref_bind_insert_mode(tmp_path):
+    """AutoCAD INSERT mode: converts xref into local block, merging symbols directly."""
+    _referenced(tmp_path)
+    host_path = _host(tmp_path)
+    document = Document.load(host_path)
+    doc = document.doc
+
+    # Pre-existing host layer with distinct color
+    doc.layers.add("WALLS", color=5)
+
+    block = doc.blocks.get("topo")
+    assert xrefs.is_xref_block(block)
+
+    cmd = xrefs.BindXrefCommand("topo", mode="insert")
+    cmd.do(document)
+
+    # 1. Block converted
+    assert not xrefs.is_xref_block(block)
+    assert len(list(block)) == 3
+
+    # 2. Symbols merged directly without $0$ prefix
+    assert "WALLS" in doc.layers
+    assert doc.layers.get("WALLS").dxf.color == 5  # Host layer preserved
+    assert "MH" in doc.blocks
+    assert "topo$0$WALLS" not in doc.layers
+    assert "topo$0$MH" not in doc.blocks
+
+
+def test_execute_bind_helper(tmp_path):
+    from tools.xrefs import execute_bind
+
+    _referenced(tmp_path)
+    host_path = _host(tmp_path)
+    document = Document.load(host_path)
+
+    ok = execute_bind(document.doc, "topo", mode="insert")
+    assert ok is True
+    assert not xrefs.is_xref_block(document.doc.blocks.get("topo"))
+

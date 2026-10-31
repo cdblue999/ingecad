@@ -14,7 +14,8 @@ and the picture agree whichever way the user went.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QMenu, QPushButton,
+from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QGroupBox, QHBoxLayout,
+                               QHeaderView, QMenu, QPushButton, QRadioButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout,
                                QWidget)
 
@@ -22,6 +23,48 @@ from core import xrefs
 from core.i18n import tr
 
 COLUMNS = ("Reference Name", "Status", "Type", "Saved Path")
+
+
+class BindXrefDialog(QDialog):
+    """AutoCAD-standard Bind Xrefs dialog.
+
+    Allows choosing between Bind (namespaced with $0$) and Insert (direct symbol merge).
+    """
+
+    def __init__(self, parent=None, xref_name: str = "") -> None:
+        super().__init__(parent)
+        self.setWindowTitle(tr("Bind Xrefs"))
+        self.setMinimumWidth(320)
+        layout = QVBoxLayout(self)
+
+        group = QGroupBox(tr("Bind Type"), self)
+        group_layout = QVBoxLayout(group)
+
+        self.bind_radio = QRadioButton(tr("&Bind"), group)
+        self.bind_radio.setChecked(True)
+        self.bind_radio.setToolTip(
+            tr("Prefixes dependent symbol names (layers, styles) with {name}$0$...", name=xref_name)
+        )
+        group_layout.addWidget(self.bind_radio)
+
+        self.insert_radio = QRadioButton(tr("&Insert"), group)
+        self.insert_radio.setToolTip(
+            tr("Merges dependent symbols directly into the drawing without prefix.")
+        )
+        group_layout.addWidget(self.insert_radio)
+
+        layout.addWidget(group)
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    @property
+    def mode(self) -> str:
+        return "insert" if self.insert_radio.isChecked() else "bind"
 
 
 class XrefsPanel(QWidget):
@@ -38,14 +81,17 @@ class XrefsPanel(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
         layout.addWidget(self.table)
         row = QHBoxLayout()
         self.attach_btn = QPushButton(tr("Attach..."), self)
+        self.bind_btn = QPushButton(tr("Bind..."), self)
         self.detach_btn = QPushButton(tr("Detach"), self)
         self.reload_btn = QPushButton(tr("Reload"), self)
         self.unload_btn = QPushButton(tr("Unload"), self)
-        for button in (self.attach_btn, self.detach_btn, self.reload_btn,
-                       self.unload_btn):
+        for button in (self.attach_btn, self.bind_btn, self.detach_btn,
+                       self.reload_btn, self.unload_btn):
             button.setFocusPolicy(Qt.NoFocus)
             row.addWidget(button)
         layout.addLayout(row)
@@ -58,6 +104,7 @@ class XrefsPanel(QWidget):
             action.triggered.connect(
                 lambda _=False, c=command: self.window.tools.start_tool(c))
         self.attach_btn.setMenu(self._attach_menu)
+        self.bind_btn.clicked.connect(self._bind)
         self.detach_btn.clicked.connect(self._detach)
         self.reload_btn.clicked.connect(self._reload)
         self.unload_btn.clicked.connect(self._unload)
@@ -104,10 +151,67 @@ class XrefsPanel(QWidget):
 
     def _sync_buttons(self) -> None:
         chosen = self.selected()
+        is_dwg = chosen is not None and chosen[0] == "dwg"
+        self.bind_btn.setEnabled(is_dwg)
         self.detach_btn.setEnabled(chosen is not None)
         self.reload_btn.setEnabled(chosen is not None)
-        self.unload_btn.setEnabled(chosen is not None and chosen[0] == "dwg")
+        self.unload_btn.setEnabled(is_dwg)
         self.attach_btn.setEnabled(getattr(self.window, "document", None) is not None)
+
+    def _context_menu(self, pos) -> None:
+        chosen = self.selected()
+        if chosen is None:
+            return
+        menu = QMenu(self)
+        if chosen[0] == "dwg":
+            act_open = menu.addAction(tr("Open"))
+            act_open.triggered.connect(self._open_selected)
+            menu.addSeparator()
+            act_bind = menu.addAction(tr("Bind..."))
+            act_bind.triggered.connect(self._bind)
+            act_unload = menu.addAction(tr("Unload"))
+            act_unload.triggered.connect(self._unload)
+        act_reload = menu.addAction(tr("Reload"))
+        act_reload.triggered.connect(self._reload)
+        act_detach = menu.addAction(tr("Detach"))
+        act_detach.triggered.connect(self._detach)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _open_selected(self) -> None:
+        name = self.selected_name()
+        if name is None:
+            return
+        document = getattr(self.window, "document", None)
+        if document is None:
+            return
+        block = document.doc.blocks.get(name)
+        if block is None:
+            return
+        raw_path = xrefs.xref_path_of(block)
+        resolved = xrefs.resolve_path(getattr(document, "path", None), raw_path)
+        if resolved is not None and resolved.is_file():
+            self.window.open_paths([resolved])
+        else:
+            self.window.command_line.echo(tr("Could not find file: {path}", path=raw_path))
+
+    def _bind(self) -> None:
+        name = self.selected_name()
+        if name is None:
+            return
+        dlg = BindXrefDialog(self, xref_name=name)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        mode = dlg.mode
+        try:
+            self.window.tools._execute(xrefs.BindXrefCommand(name, mode=mode))
+            self.window.command_line.echo(
+                tr("Xref {name} bound ({mode}).", name=name, mode=mode.capitalize())
+            )
+            self.window.xrefs_changed()
+        except Exception as exc:
+            self.window.command_line.echo(
+                tr("Failed to bind xref {name}: {error}", name=name, error=exc)
+            )
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         # images are attached by tools that do not report here: the tab

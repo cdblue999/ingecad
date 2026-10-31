@@ -617,6 +617,122 @@ class SetXrefOverlayCommand(Command):
         document.dirty = True
 
 
+class BindXrefCommand(Command):
+    """-XREF Bind / BIND / XBIND: binds an external reference into a local block.
+
+    Supports both AutoCAD bind modes:
+    - "bind": Namespaces dependent symbols with <xref>$0$<name> (ConflictPolicy.XREF_PREFIX)
+    - "insert": Merges dependent symbols directly into the host drawing (ConflictPolicy.KEEP)
+    """
+
+    needs_regen = True
+
+    def __init__(self, name: str, mode: str = "bind") -> None:
+        self.name = f"XREF Bind ({mode})"
+        self.block_name = name
+        self.mode = mode.lower()
+        self._old_path = ""
+        self._old_flags = 0
+        self._added_layers: set[str] = set()
+        self._added_blocks: set[str] = set()
+
+    def do(self, document) -> None:
+        from ezdxf import xref
+        from ezdxf.math import Vec3
+
+        doc = document.doc
+        block = doc.blocks.get(self.block_name)
+        if block is None or not is_xref_block(block):
+            raise ValueError(f"'{self.block_name}' is not an external reference block.")
+
+        self._old_path = xref_path_of(block)
+        self._old_flags = int(block.block.dxf.get("flags", 0))
+
+        host_path = getattr(document, "path", None)
+        if host_path is None and getattr(doc, "filename", None):
+            host_path = Path(doc.filename)
+
+        resolved = resolve_path(host_path, self._old_path)
+        if resolved is None or not resolved.is_file():
+            raise FileNotFoundError(f"Cannot resolve XREF file path: {self._old_path}")
+
+        ext_doc = read_drawing(resolved).doc
+
+        policy = (
+            xref.ConflictPolicy.KEEP
+            if self.mode == "insert"
+            else xref.ConflictPolicy.XREF_PREFIX
+        )
+
+        layers_before = {l.dxf.name for l in doc.layers}
+        blocks_before = {b.name for b in doc.blocks}
+
+        # Clear any proxy content from the block definition
+        block.delete_all_entities()
+
+        loader = xref.Loader(ext_doc, doc, conflict_policy=policy)
+        loader.load_modelspace(block)
+        loader.execute(xref_prefix=self.block_name)
+
+        # Track added symbols for clean undo
+        self._added_layers = {l.dxf.name for l in doc.layers} - layers_before
+        self._added_blocks = {b.name for b in doc.blocks} - blocks_before
+
+        # Discard xref_path and clear XREF / OVERLAY flags
+        block.block.dxf.discard("xref_path")
+        flags = int(block.block.dxf.get("flags", 0))
+        block.block.dxf.flags = flags & ~BLK_XREF & ~BLK_XREF_OVERLAY & ~32
+
+        try:
+            from ezdxf.lldxf import const
+            block.block.set_flag_state(const.BLK_XREF | const.BLK_EXTERNAL, state=False)
+        except Exception:
+            pass
+
+        origin = ext_doc.header.get("$INSBASE")
+        if origin:
+            block.block.dxf.base_point = Vec3(origin)
+
+        # Drop cache entry
+        forget(resolved)
+
+        document.dirty = True
+        document.blocks_revision += 1
+        document.revision += 1
+
+    def undo(self, document) -> None:
+        doc = document.doc
+        block = doc.blocks.get(self.block_name)
+        if block is not None:
+            block.delete_all_entities()
+            block.block.dxf.flags = self._old_flags
+            block.block.dxf.xref_path = self._old_path
+
+        # Clean up blocks and layers created solely for this bind
+        for b_name in self._added_blocks:
+            if b_name in doc.blocks and b_name != self.block_name:
+                try:
+                    doc.blocks.delete_block(b_name, safe=False)
+                except Exception:
+                    pass
+
+        for l_name in self._added_layers:
+            if l_name in doc.layers and l_name not in ("0", "Defpoints"):
+                try:
+                    doc.layers.remove(l_name)
+                except Exception:
+                    pass
+
+        document.dirty = True
+        document.blocks_revision += 1
+        document.revision += 1
+
+
+def bind(document, name: str, mode: str = "bind") -> None:
+    """Convenience helper to bind an xref on a Document."""
+    BindXrefCommand(name, mode=mode).do(document)
+
+
 def unload(document, names: Iterable[str]) -> None:
     unloaded(document).update(names)
 

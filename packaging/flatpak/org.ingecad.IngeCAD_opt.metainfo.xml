@@ -86,6 +86,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.7.3" date="2026-10-31">
+      <description>
+        <p>Implement AutoCAD-standard XREF Bind and Insert operations: Bind mode with $0$ symbol namespacing and Insert mode with direct symbol merging. Adds Bind button and right-click context menu to the External References palette, BIND and XBIND commands, and -XREF Bind CLI options with full undo/redo support.</p>
+        <p xml:lang="es">Implementación de operaciones estándar de AutoCAD Unir (Bind) e Insertar (Insert) para referencias externas (XREF): modo Unir con espacio de nombres $0$ y modo Insertar con fusión directa de símbolos. Agrega botón Unir y menú contextual a la paleta de Xrefs, comandos BIND y XBIND, y opciones de -XREF con soporte completo para deshacer/rehacer.</p>
+      </description>
+    </release>
     <release version="0.7.2" date="2026-10-31">
       <description>
         <p>Fix drawing opening regressions: eliminate recursive XREF deep copy explosion, patch ezdxf font_face None handling to prevent MTEXT rendering crashes, restore fast single-pass handle deduplication, and ensure instant scene loading.</p>
