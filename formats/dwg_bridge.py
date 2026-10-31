@@ -238,6 +238,78 @@ def _dedupe_handles(dxf_path: Path) -> int:
     return len(collisions)
 
 
+def _sanitize_dxf(dxf_path: Path) -> None:
+    """Sanitize LibreDWG DXF output in a single combined pass: drop null handles
+    (5, 0) and deduplicate colliding object handles, writing to disk at most once.
+    """
+    lines = _read_dxf_lines(dxf_path)
+    filtered: list[str] = []
+    dropped = False
+    spots: list[tuple[int, str]] = []
+    seed_at: Optional[int] = None
+    section: Optional[str] = None
+    expecting = False
+
+    i = 0
+    while i + 1 < len(lines):
+        code, value = lines[i].strip(), lines[i + 1].strip()
+        if code == "5" and value == "0":
+            dropped = True
+            i += 2
+            continue
+
+        curr_idx = len(filtered)
+        filtered.append(lines[i])
+        filtered.append(lines[i + 1])
+
+        if code == "0":
+            if value == "ENDSEC":
+                section = None
+            expecting = value not in ("SECTION", "ENDSEC", "EOF")
+        elif code == "2" and section is None:
+            section = value
+        elif code == "9" and value == "$HANDSEED" and i + 3 < len(lines):
+            seed_at = curr_idx + 3 if lines[i + 2].strip() == "5" else None
+        elif code == "5" and expecting and section in _HANDLE_SECTIONS:
+            spots.append((curr_idx + 1, value))
+            expecting = False
+        i += 2
+    filtered.extend(lines[i:])
+
+    def as_int(handle: str) -> Optional[int]:
+        try:
+            return int(handle, 16)
+        except ValueError:
+            return None
+
+    seen: set[str] = set()
+    collisions: list[int] = []
+    for idx, handle in spots:
+        if handle in seen:
+            collisions.append(idx)
+        else:
+            seen.add(handle)
+
+    if not dropped and not collisions:
+        return
+
+    if collisions:
+        used = {h for _, h in spots}
+        sane = [n for n in (as_int(h) for _, h in spots) if n is not None and n < _MAX_SANE_HANDLE]
+        nxt = (max(sane) if sane else 0) + 1
+        for idx in collisions:
+            while format(nxt, "X") in used:
+                nxt += 1
+            fresh = format(nxt, "X")
+            used.add(fresh)
+            filtered[idx] = fresh
+            nxt += 1
+        if seed_at is not None:
+            filtered[seed_at] = format(nxt, "X")
+
+    _write_dxf_lines(dxf_path, filtered)
+
+
 def dwg_to_dxf(dwg_path: Path) -> Path:
     """Convert a DWG to a temporary DXF; returns the DXF path.
 
@@ -246,8 +318,7 @@ def dwg_to_dxf(dwg_path: Path) -> Path:
     plain even when the input drawing name carries accents.
     """
     out_dxf = _convert_dwg(dwg_path)
-    _strip_null_handles(out_dxf)
-    _dedupe_handles(out_dxf)
+    _sanitize_dxf(out_dxf)
     return out_dxf
 
 

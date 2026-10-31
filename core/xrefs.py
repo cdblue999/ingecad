@@ -233,13 +233,25 @@ def referenced_document(document, block):
     return load(path)
 
 
-def preload(document) -> None:
-    """Load every referenced drawing now (before a regen forks its
-    workers, so each child inherits the cache instead of reading the
-    files itself)."""
+def preload(document, _visited: Optional[set] = None) -> None:
+    """Load every referenced drawing and nested attached drawings now (before
+    a regen forks its workers, so each child inherits the cache instead of
+    reading the files itself)."""
+    visited = set(_visited or ())
+    doc_path = getattr(document, "path", None)
+    if doc_path:
+        try:
+            canon = str(Path(doc_path).resolve())
+            if canon in visited:
+                return
+            visited.add(canon)
+        except OSError:
+            pass
     for block in xref_blocks(document.doc):
         try:
-            referenced_document(document, block)
+            xdoc = referenced_document(document, block)
+            if xdoc is not None and not is_overlay(block):
+                preload(xdoc, visited)
         except Exception:                    # noqa: BLE001
             pass
 
@@ -411,15 +423,21 @@ def referenced_for_insert(document, insert):
     return referenced_document(document, block)
 
 
-def virtual_entities(insert, document):
+def virtual_entities(insert, document, *, _depth: int = 0, _visited: Optional[set] = None):
     """Copies of the referenced drawing's modelspace entities, transformed
     by ``insert`` -- what the regen draws and the indexes trace for an
     xref INSERT. Empty when the file is missing or unloaded.
+
+    Supports nested multi-branch architectural XREFs up to MAX_DEPTH (8),
+    propagating Attachments (BLK_XREF) while pruning Overlays (BLK_XREF_OVERLAY),
+    with cycle detection against circular references.
 
     Entities that fail to copy or transform are skipped (a viewer draws
     what it can), and the copies belong to the REFERENCED document, so
     their layers, styles and nested blocks resolve there.
     """
+    if _depth > MAX_DEPTH:
+        return
     xdoc = referenced_for_insert(document, insert)
     if xdoc is None:
         return
@@ -427,7 +445,39 @@ def virtual_entities(insert, document):
         matrix = insert.matrix44()
     except Exception:                        # noqa: BLE001
         return
+
+    visited = set(_visited or ())
+    doc_path = getattr(xdoc, "path", None)
+    if doc_path:
+        try:
+            canon = str(Path(doc_path).resolve())
+            if canon in visited:
+                return
+            visited.add(canon)
+        except OSError:
+            pass
+
     for entity in xdoc.doc.modelspace():
+        # Check for nested XREFs:
+        if entity.dxftype() == "INSERT" and is_xref_insert(entity):
+            # Overlays in a referenced file do not carry over to parent drawings:
+            block = entity.doc.blocks.get(entity.dxf.name)
+            if block is not None and is_overlay(block):
+                continue
+            # Attached nested xref: recurse down the branch
+            try:
+                for nested_copy in virtual_entities(
+                    entity, xdoc, _depth=_depth + 1, _visited=visited
+                ):
+                    try:
+                        nested_copy.transform(matrix)
+                    except Exception:            # noqa: BLE001
+                        continue
+                    yield nested_copy
+            except Exception:                    # noqa: BLE001
+                pass
+            continue
+
         for plain in _explode(entity, 0):
             try:
                 copy = plain if plain.dxf.handle is None else plain.copy()
