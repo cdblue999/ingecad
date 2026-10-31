@@ -43,7 +43,7 @@ fi
 
 # The release signing key (backup and notes in ~/Documentos/claves-gpg-ingecad).
 GPG_FPR="${GPG_FPR:-0D364E74CE6C0A577D1E0A680E252045461C416E}"
-REPO_OSTREE="$HERE/.staging/repo"
+REPO_OSTREE="${FLATPAK_BUILDER_REPO:-${DEFAULT_BASE}/.staging/repo}"
 
 if [ "${1:-}" = "--repo" ]; then
   gpg --list-secret-keys "$GPG_FPR" >/dev/null 2>&1 || {
@@ -74,6 +74,7 @@ $BUILDER \
   "$BUILD_DIR" "$HERE/$APPID.yml"
 
 if [ "${1:-}" = "--bundle" ]; then
+  mkdir -p "$HERE/.staging"
   BUNDLE="$HERE/.staging/IngeCAD_opt.flatpak"
   echo "▶ Exporting the distributable bundle…"
   $BUILDER --user --force-clean --disable-rofiles-fuse --repo "$REPO_OSTREE" \
