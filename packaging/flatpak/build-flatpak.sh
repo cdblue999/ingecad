@@ -3,7 +3,7 @@
 # distributable single-file bundle a non-terminal user double-clicks.
 #
 #   packaging/flatpak/build-flatpak.sh            # build + install
-#   packaging/flatpak/build-flatpak.sh --bundle   # + IngeCAD.flatpak
+#   packaging/flatpak/build-flatpak.sh --bundle   # + IngeCAD_opt.flatpak
 #   packaging/flatpak/build-flatpak.sh --repo     # into the signed OSTree repo
 #
 # --repo is the publishing build: it commits into .staging/repo signed with
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-APPID="org.ingecad.IngeCAD"
+APPID="org.ingecad.IngeCAD_opt"
 STATE_DIR="$HERE/.flatpak-builder"
 BUILD_DIR="$HERE/.staging/build"
 
@@ -65,7 +65,7 @@ $BUILDER \
   "$BUILD_DIR" "$HERE/$APPID.yml"
 
 if [ "${1:-}" = "--bundle" ]; then
-  BUNDLE="$HERE/.staging/IngeCAD.flatpak"
+  BUNDLE="$HERE/.staging/IngeCAD_opt.flatpak"
   echo "▶ Exporting the distributable bundle…"
   $BUILDER --user --force-clean --disable-rofiles-fuse --repo "$REPO_OSTREE" \
     --state-dir "$STATE_DIR" "$BUILD_DIR" "$HERE/$APPID.yml"

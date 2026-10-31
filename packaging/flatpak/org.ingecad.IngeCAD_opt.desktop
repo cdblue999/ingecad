@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=IngeCAD
+Name=IngeCAD_opt
 GenericName=2D CAD
 GenericName[es]=CAD 2D
 Comment=View and edit DWG/DXF drawings
@@ -9,6 +9,6 @@ Exec=ingecad %F
 Terminal=false
 Categories=Graphics;Engineering;2DGraphics;
 MimeType=image/vnd.dwg;image/vnd.dxf;
-Icon=org.ingecad.IngeCAD
+Icon=org.ingecad.IngeCAD_opt
 StartupNotify=true
 StartupWMClass=ingecad

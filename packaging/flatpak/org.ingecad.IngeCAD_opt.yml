@@ -2,7 +2,7 @@
 # Flathub — Flathub forbids network during build, and the app module below
 # lets pip download wheels. The shape follows IngePresupuestos' proven
 # manifest (installer/flatpak/ in that repo), krb5 lesson included.
-app-id: org.ingecad.IngeCAD
+app-id: org.ingecad.IngeCAD_opt
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
 sdk: org.freedesktop.Sdk

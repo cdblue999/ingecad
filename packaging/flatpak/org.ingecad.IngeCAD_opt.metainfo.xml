@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>org.ingecad.IngeCAD</id>
+  <id>org.ingecad.IngeCAD_opt</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>IngeCAD</name>
+  <name>IngeCAD_opt</name>
   <summary>View and edit DWG/DXF drawings</summary>
   <summary xml:lang="es">Ver y editar planos DWG/DXF</summary>
   <developer id="org.ingecad">
@@ -43,7 +43,7 @@
       Reads and writes DWG through LibreDWG, bundled.
     </p>
   </description>
-  <launchable type="desktop-id">org.ingecad.IngeCAD.desktop</launchable>
+  <launchable type="desktop-id">org.ingecad.IngeCAD_opt.desktop</launchable>
   <url type="homepage">https://ingecad.org</url>
   <url type="bugtracker">https://github.com/ingelibre/ingecad/issues</url>
   <url type="vcs-browser">https://github.com/ingelibre/ingecad</url>

@@ -1,6 +1,6 @@
-# IngeCAD as a Flatpak
+# IngeCAD_opt as a Flatpak
 
-For the engineer who never opens a terminal: download `IngeCAD.flatpak`,
+For the engineer who never opens a terminal: download `IngeCAD_opt.flatpak`,
 double-click it, and GNOME Software / KDE Discover installs it — the
 Freedesktop runtime comes from Flathub automatically (the bundle carries
 `--runtime-repo`). Deliberately NOT on Flathub for now; this is
@@ -8,7 +8,7 @@ self-distribution, the same road IngePresupuestos already walks
 (`downloads.ingepresupuestos.com/flatpak/`).
 
     packaging/flatpak/build-flatpak.sh            # build + install (user)
-    packaging/flatpak/build-flatpak.sh --bundle   # + .staging/IngeCAD.flatpak
+    packaging/flatpak/build-flatpak.sh --bundle   # + .staging/IngeCAD_opt.flatpak
 
 The manifest compiles LibreDWG from the pristine release plus
 `tools/libredwg-patches/current/` — the same converters the AppImage

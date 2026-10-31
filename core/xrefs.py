@@ -135,6 +135,19 @@ def resolve_path(host_path: Optional[Path], xref_path: str) -> Optional[Path]:
                 return candidate.resolve()
         except OSError:
             continue
+    # On Linux / POSIX, filesystems are case-sensitive. If an exact match
+    # fails, perform a case-insensitive fallback in the candidate's parent directory:
+    if os.name == "posix":
+        for candidate in candidates:
+            cand_parent = candidate.parent
+            if cand_parent.is_dir():
+                target_lower = candidate.name.lower()
+                try:
+                    for entry in cand_parent.iterdir():
+                        if entry.name.lower() == target_lower and entry.is_file():
+                            return entry.resolve()
+                except OSError:
+                    continue
     return None
 
 

@@ -9,6 +9,7 @@ incremental overlay scene so drawing stays instant on any file size.
 from __future__ import annotations
 
 import math
+import time
 from typing import Optional
 
 import numpy as np
@@ -422,6 +423,9 @@ class ToolController(QObject):
         self.repeat_name: str | None = None
         self.snap_engine: Optional[SnapEngine] = None
         self.snap_hit: Optional[SnapHit] = None
+        self._last_snap_time: float = 0.0
+        self._last_snap_cursor: Optional[tuple[float, float]] = None
+        self._last_snap_hit: Optional[SnapHit] = None
         self._cursor: Optional[tuple[float, float]] = None
         # The overlay's curve tolerance: cached by the _flatten property
         # under (document, space, VIEWRES).
@@ -2150,14 +2154,25 @@ class ToolController(QObject):
         kinds = self.snap_kinds()
         self.track_hint = None
         if needs_snap and self.snap_engine is not None and kinds:
-            self.snap_hit = self._find_snap(
-                (wx, wy), threshold_world, kinds, self.anchor_point())
-            through = self._snap_through_viewport((wx, wy), threshold_world)
-            if through is not None and (
-                    self.snap_hit is None
-                    or math.hypot(through.x - wx, through.y - wy)
-                    < math.hypot(self.snap_hit.x - wx, self.snap_hit.y - wy)):
-                self.snap_hit = through
+            now = time.monotonic()
+            moved_enough = (
+                self._last_snap_cursor is None
+                or math.hypot(wx - self._last_snap_cursor[0], wy - self._last_snap_cursor[1]) >= 0.25 * threshold_world
+            )
+            if moved_enough or (now - self._last_snap_time >= 0.016):
+                self._last_snap_time = now
+                self._last_snap_cursor = (wx, wy)
+                self.snap_hit = self._find_snap(
+                    (wx, wy), threshold_world, kinds, self.anchor_point())
+                through = self._snap_through_viewport((wx, wy), threshold_world)
+                if through is not None and (
+                        self.snap_hit is None
+                        or math.hypot(through.x - wx, through.y - wy)
+                        < math.hypot(self.snap_hit.x - wx, self.snap_hit.y - wy)):
+                    self.snap_hit = through
+                self._last_snap_hit = self.snap_hit
+            else:
+                self.snap_hit = self._last_snap_hit
         if needs_snap and self.snap_engine is not None and (
                 kinds & {"EXT", "PAR"}):
             self._watch_tracking_snap(wx, wy, threshold_world, kinds)
