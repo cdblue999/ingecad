@@ -107,3 +107,13 @@ def _enable_on_gui_thread() -> None:
     # queued into the GUI thread's event loop (a zero-delay single shot
     # with a context object runs in that object's thread)
     QTimer.singleShot(0, app, _enable_now)
+
+
+def force_enable() -> None:
+    """Force enable garbage collection and clear all pause counts on shutdown."""
+    global _paused, _reserved
+    with _lock:
+        _paused = 0
+        _reserved = 0
+        gc.enable()
+

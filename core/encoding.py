@@ -87,6 +87,38 @@ def decode_escapes(text: str) -> str:
         return decoded
 
 
+def decode_and_repair_mtext(doc) -> tuple[int, int]:
+    """Decode escapes and repair invalid defaults for all MTEXT entities in a single pass.
+
+    Returns (escapes_changed, defaults_changed).
+    """
+    escapes_changed = 0
+    defaults_changed = 0
+    for entity in _mtext_entities(doc):
+        # 1. Decode escapes
+        text = entity.text
+        decoded = decode_escapes(text)
+        if decoded != text:
+            entity.text = decoded
+            escapes_changed += 1
+
+        # 2. Repair defaults
+        dirty = False
+        d = entity.dxf
+        factor = d.get("line_spacing_factor", None)
+        if factor is not None and not (0.25 <= factor <= 4.0):
+            d.line_spacing_factor = 1.0
+            dirty = True
+        if d.get("line_spacing_style", None) == 0:
+            d.line_spacing_style = 1
+            dirty = True
+        if d.get("flow_direction", None) == 0:
+            d.flow_direction = 1
+            dirty = True
+        defaults_changed += dirty
+    return escapes_changed, defaults_changed
+
+
 def decode_escapes_in_document(doc) -> int:
     """Decode the escapes of every MTEXT in a freshly-opened drawing.
 

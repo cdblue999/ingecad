@@ -96,7 +96,9 @@ def drain_orphans() -> None:
     """Join every parked thumbnail worker. Called from the app's exit path."""
     for worker in list(_ORPHANS):
         worker.stop()
-        worker.wait()
+        if not worker.wait(100):
+            worker.terminate()
+            worker.wait(50)
         _ORPHANS.discard(worker)
 
 

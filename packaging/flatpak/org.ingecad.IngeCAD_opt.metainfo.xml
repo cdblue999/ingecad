@@ -86,6 +86,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.7.7" date="2026-11-01">
+      <description>
+        <p>Optimize DWG open and save performance, and eliminate exit freezes: single-pass DXF handle sanitization on open, combined MTEXT escape and default repair, fast DWG saving skipping redundant reverse-conversion verification, non-blocking background worker abortion with bounded timeouts on exit, and parallel regeneration cancellation.</p>
+        <p xml:lang="es">Optimización del rendimiento de apertura y guardado de DWG y eliminación de bloqueos al cerrar: saneamiento de identificadores DXF en una sola pasada al abrir, reparación combinada de escapes y valores por defecto de MTEXT, guardado rápido de DWG omitiendo la verificación redundante de conversión inversa, cancelación no bloqueante de trabajadores en segundo plano con límites de tiempo al salir y cancelación de regeneración paralela.</p>
+      </description>
+    </release>
     <release version="0.7.6" date="2026-11-01">
       <description>
         <p>Fix memory exhaustion and UI freeze on sequential XREF BIND: completely neutralize nested XREF block flags and paths, enforce background regen synchronization during document mutations, disable palette actions while regeneration is active, cap parallel workers to 4, and run garbage collection after scene builds.</p>
