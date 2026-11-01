@@ -86,6 +86,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.7.8" date="2026-11-01">
+      <description>
+        <p>Introduce the Express Tools extension inspired by AutoCAD Express Tools: BURST (explode blocks preserving attribute values), BCOUNT (block reference count summary), BLOCKREPLACE (replace block definitions), TXT2MTXT (merge text entities into mtext), TCASE (text case conversion), TCOUNT (sequential text numbering), TCIRCLE (enclose text in shape), TORIENT (orient text readability), FLATTEN (flatten 3D geometry to 2D elevation Z=0), EXTRIM (extended boundary trim), and BREAKLINE (engineering breakline symbol).</p>
+        <p xml:lang="es">Incorporación del complemento Express Tools inspirado en AutoCAD Express Tools: BURST (descomponer bloques manteniendo atributos), BCOUNT (resumen de conteo de bloques), BLOCKREPLACE (reemplazar definiciones de bloque), TXT2MTXT (convertir texto en texto múltiple), TCASE (cambiar mayúsculas/minúsculas), TCOUNT (numeración automática), TCIRCLE (encerrar texto con figura), TORIENT (orientar ángulo de texto), FLATTEN (aplanar geometría 3D a 2D cota Z=0), EXTRIM (recorte extendido a contorno) y BREAKLINE (símbolo de línea de corte).</p>
+      </description>
+    </release>
     <release version="0.7.7" date="2026-11-01">
       <description>
         <p>Optimize DWG open and save performance, and eliminate exit freezes: single-pass DXF handle sanitization on open, combined MTEXT escape and default repair, fast DWG saving skipping redundant reverse-conversion verification, non-blocking background worker abortion with bounded timeouts on exit, and parallel regeneration cancellation.</p>
