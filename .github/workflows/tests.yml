@@ -2,9 +2,9 @@ name: tests
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "dev-windows-opt", "dev-linux-opt" ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "dev-windows-opt", "dev-linux-opt" ]
 
 jobs:
   pytest:
