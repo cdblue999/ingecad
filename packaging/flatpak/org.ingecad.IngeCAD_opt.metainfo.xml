@@ -86,6 +86,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.7.6" date="2026-11-01">
+      <description>
+        <p>Fix memory exhaustion and UI freeze on sequential XREF BIND: completely neutralize nested XREF block flags and paths, enforce background regen synchronization during document mutations, disable palette actions while regeneration is active, cap parallel workers to 4, and run garbage collection after scene builds.</p>
+        <p xml:lang="es">Corrección de agotamiento de memoria y congelamiento en BIND secuencial de XREFs: neutraliza completamente banderas y rutas de bloques XREF anidados, sincroniza la regeneración en segundo plano durante mutaciones, desactiva acciones de paleta mientras la regeneración está activa, limita a 4 los trabajadores paralelos y libera memoria tras la construcción de escenas.</p>
+      </description>
+    </release>
     <release version="0.7.5" date="2026-11-01">
       <description>
         <p>Fix XREF BIND UI freeze and parallel regen timeout: eliminate recursive nested DWG re-loading in BindXrefCommand, prevent double in-memory regens, add UI busy/wait cursor feedback during BIND, and optimize image reference scanning.</p>

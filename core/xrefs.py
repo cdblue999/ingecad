@@ -681,7 +681,7 @@ class BindXrefCommand(Command):
         # Discard xref_path and clear XREF / OVERLAY flags
         block.block.dxf.discard("xref_path")
         flags = int(block.block.dxf.get("flags", 0))
-        block.block.dxf.flags = flags & ~BLK_XREF & ~BLK_XREF_OVERLAY & ~32
+        block.block.dxf.flags = flags & ~BLK_XREF & ~BLK_XREF_OVERLAY & ~BLK_EXTERNAL & ~32
 
         try:
             from ezdxf.lldxf import const
@@ -693,16 +693,17 @@ class BindXrefCommand(Command):
         # reference dependencies into the host drawing. Any nested XREF blocks
         # transferred from the child drawing must have their XREF identity severed
         # and become pure internal blocks:
-        for b_name in self._added_blocks:
-            nested_blk = doc.blocks.get(b_name)
-            if nested_blk is not None and is_xref_block(nested_blk):
-                nested_blk.block.dxf.discard("xref_path")
-                n_flags = int(nested_blk.block.dxf.get("flags", 0))
-                nested_blk.block.dxf.flags = n_flags & ~BLK_XREF & ~BLK_XREF_OVERLAY & ~32
-                try:
-                    nested_blk.block.set_flag_state(const.BLK_XREF | const.BLK_EXTERNAL, state=False)
-                except Exception:
-                    pass
+        prefix = f"{self.block_name}$"
+        for b in list(doc.blocks):
+            if b.name == self.block_name or b.name.startswith(prefix) or b.name in self._added_blocks:
+                if is_xref_block(b) or xref_path_of(b):
+                    b.block.dxf.discard("xref_path")
+                    n_flags = int(b.block.dxf.get("flags", 0))
+                    b.block.dxf.flags = n_flags & ~BLK_XREF & ~BLK_XREF_OVERLAY & ~BLK_EXTERNAL & ~32
+                    try:
+                        b.block.set_flag_state(const.BLK_XREF | const.BLK_EXTERNAL, state=False)
+                    except Exception:
+                        pass
 
         origin = ext_doc.header.get("$INSBASE")
         if origin:
@@ -710,6 +711,9 @@ class BindXrefCommand(Command):
 
         # Drop cache entry
         forget(resolved)
+
+        import gc
+        gc.collect()
 
         document.dirty = True
         document.blocks_revision += 1

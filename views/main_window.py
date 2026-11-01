@@ -3959,7 +3959,7 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             return
         self.tools._invalidate_geometry()
         self.invalidate_vp_model_cache()
-        self.regen_in_memory()
+        self.regen_in_background()
         panel = getattr(self, "_xrefs_panel", None)
         if panel is not None:
             panel.refresh()
@@ -4160,6 +4160,11 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             worker.wait()   # thread has emitted; joins immediately
             if scene is not None:
                 self._regen_ms[layout] = worker.duration_ms
+        import gc
+        gc.collect()
+        panel = getattr(self, "_xrefs_panel", None)
+        if panel is not None:
+            panel._sync_buttons()
         if document is not self.document:
             # another drawing's tab: keep the scene for when it comes back,
             # and build the one in view if it asked while this ran
@@ -6387,8 +6392,14 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
     #: How long the drawing must sit still before an automatic save starts.
     AUTOSAVE_QUIET_S = 15.0
 
+    def wait_for_regen(self) -> None:
+        """Wait for any running background regen worker to finish."""
+        worker = self._regen_worker
+        if worker is not None and worker.isRunning():
+            worker.wait()
+
     def _autosave_gate(self) -> None:
-        """Let a running automatic save finish before the drawing changes.
+        """Let a running automatic save or regen finish before the drawing changes.
 
         The only moment the app can stall. Measured on a plan of 88 897
         entities, an edit that lands right at the start of a write waits
@@ -6401,6 +6412,9 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         worker = self._autosave_worker
         if worker is not None and worker.isRunning():
             worker.wait()
+        regen = self._regen_worker
+        if regen is not None and regen.isRunning():
+            regen.wait()
 
     def _autosave_discard(self) -> None:
         """A real save (or a clean exit) makes the automatic one moot."""
