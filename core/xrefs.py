@@ -119,12 +119,23 @@ def resolve_path(host_path: Optional[Path], xref_path: str) -> Optional[Path]:
     if not xref_path:
         return None
     candidates: list[Path] = []
-    given = Path(xref_path.replace("\\", "/"))
+    clean_path = xref_path.strip('"\'')
+    given = Path(clean_path.replace("\\", "/"))
     if given.is_absolute():
         candidates.append(given)
     folder = Path(host_path).parent if host_path else Path.cwd()
-    candidates.append(folder / given)
+    try:
+        candidates.append(folder / given)
+    except Exception:
+        pass
     candidates.append(folder / given.name)
+    # If given is an absolute path with drive or root, also test relative subpath
+    # (e.g. D:/Projects/Sub/xref.dwg -> Sub/xref.dwg in host folder)
+    if len(given.parts) > 2 and given.is_absolute():
+        try:
+            candidates.append(folder / Path(*given.parts[1:]))
+        except Exception:
+            pass
     for candidate in list(candidates):
         for other in (".dwg", ".dxf"):
             if candidate.suffix.lower() != other:
