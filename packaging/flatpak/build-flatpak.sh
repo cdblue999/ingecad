@@ -67,24 +67,22 @@ if [ "${1:-}" = "--repo" ]; then
   exit 0
 fi
 
-echo "▶ Building with flatpak-builder…"
-$BUILDER \
-  --user --force-clean --install --disable-rofiles-fuse \
-  --state-dir "$STATE_DIR" \
-  "$BUILD_DIR" "$HERE/$APPID.yml"
-
 if [ "${1:-}" = "--bundle" ]; then
-  mkdir -p "$HERE/.staging"
+  mkdir -p "$HERE/.staging" "$(dirname "$REPO_OSTREE")"
   BUNDLE="$HERE/.staging/IngeCAD_opt.flatpak"
-  echo "▶ Exporting the distributable bundle…"
-  $BUILDER --user --force-clean --disable-rofiles-fuse --repo "$REPO_OSTREE" \
+  echo "▶ Building and exporting the distributable bundle…"
+  $BUILDER --user --force-clean --install --disable-rofiles-fuse --repo "$REPO_OSTREE" \
     --state-dir "$STATE_DIR" "$BUILD_DIR" "$HERE/$APPID.yml"
-  # --runtime-repo lets the user's GNOME Software fetch the Freedesktop
-  # runtime from Flathub on its own when the bundle is double-clicked.
   flatpak build-bundle \
     --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
     "$REPO_OSTREE" "$BUNDLE" "$APPID"
   echo "✔ Bundle: $BUNDLE"
+else
+  echo "▶ Building with flatpak-builder…"
+  $BUILDER \
+    --user --force-clean --install --disable-rofiles-fuse \
+    --state-dir "$STATE_DIR" \
+    "$BUILD_DIR" "$HERE/$APPID.yml"
 fi
 
 echo ""
