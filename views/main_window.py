@@ -4023,21 +4023,31 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
 
     def _xref_bind_names(self, text: str, mode: str) -> None:
         from core import xrefs
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QApplication
 
         names = self._xref_names(text)
         if not names:
             return
-        for name in names:
-            try:
-                self.tools._execute(xrefs.BindXrefCommand(name, mode=mode))
-                self.command_line.echo(
-                    tr("Xref {name} bound ({mode}).", name=name, mode=mode.capitalize())
-                )
-            except Exception as e:
-                self.command_line.echo(
-                    tr("Failed to bind xref {name}: {error}", name=name, error=e)
-                )
-        self.xrefs_changed()
+        QGuiApplication.setOverrideCursor(Qt.WaitCursor)
+        self._loading_begin(tr("Binding external reference(s)..."))
+        QApplication.processEvents()
+        try:
+            for name in names:
+                try:
+                    self.tools._execute(xrefs.BindXrefCommand(name, mode=mode))
+                    self.command_line.echo(
+                        tr("Xref {name} bound ({mode}).", name=name, mode=mode.capitalize())
+                    )
+                except Exception as e:
+                    self.command_line.echo(
+                        tr("Failed to bind xref {name}: {error}", name=name, error=e)
+                    )
+            self.xrefs_changed()
+        finally:
+            self._loading_end()
+            QGuiApplication.restoreOverrideCursor()
 
     def _xref_detach(self, text: str) -> None:
         from core import xrefs

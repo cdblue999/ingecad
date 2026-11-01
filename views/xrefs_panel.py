@@ -202,6 +202,13 @@ class XrefsPanel(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return
         mode = dlg.mode
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QApplication
+
+        QGuiApplication.setOverrideCursor(Qt.WaitCursor)
+        self.window._loading_begin(tr("Binding external reference {name}...", name=name))
+        QApplication.processEvents()
         try:
             self.window.tools._execute(xrefs.BindXrefCommand(name, mode=mode))
             self.window.command_line.echo(
@@ -212,6 +219,9 @@ class XrefsPanel(QWidget):
             self.window.command_line.echo(
                 tr("Failed to bind xref {name}: {error}", name=name, error=exc)
             )
+        finally:
+            self.window._loading_end()
+            QGuiApplication.restoreOverrideCursor()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         # images are attached by tools that do not report here: the tab

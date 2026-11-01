@@ -292,17 +292,17 @@ def image_references(document) -> list[XrefInfo]:
     "Unreferenced" when no IMAGE uses the definition any more."""
     import re
 
-    from core.layers import placed_entities
-
     doc = document.doc
     images = doc.rootdict.get(IMAGE_DICT)
-    if images is None:
+    if not images:
         return []
     counts: dict[str, int] = {}
-    for entity in placed_entities(document):
-        if entity.dxftype() == "IMAGE":
-            key = entity.dxf.get("image_def_handle", "")
-            counts[key] = counts.get(key, 0) + 1
+    # Count IMAGE entities placed in layouts (modelspace and paperspace)
+    for layout in doc.layouts:
+        for entity in layout:
+            if entity.dxftype() == "IMAGE":
+                key = entity.dxf.get("image_def_handle", "")
+                counts[key] = counts.get(key, 0) + 1
     out = []
     for name, image_def in images.items():
         if image_def is None or not image_def.is_alive or image_def.dxftype() != "IMAGEDEF":
@@ -625,7 +625,7 @@ class BindXrefCommand(Command):
     - "insert": Merges dependent symbols directly into the host drawing (ConflictPolicy.KEEP)
     """
 
-    needs_regen = True
+    needs_regen = False
 
     def __init__(self, name: str, mode: str = "bind") -> None:
         self.name = f"XREF Bind ({mode})"
@@ -696,19 +696,6 @@ class BindXrefCommand(Command):
         for b_name in self._added_blocks:
             nested_blk = doc.blocks.get(b_name)
             if nested_blk is not None and is_xref_block(nested_blk):
-                raw_nested_path = xref_path_of(nested_blk)
-                if raw_nested_path:
-                    nested_resolved = resolve_path(host_path, raw_nested_path)
-                    if nested_resolved is None and resolved.parent:
-                        nested_resolved = resolve_path(resolved.parent, raw_nested_path)
-                    if nested_resolved and nested_resolved.is_file():
-                        try:
-                            nested_doc = read_drawing(nested_resolved).doc
-                            nested_loader = xref.Loader(nested_doc, doc, conflict_policy=policy)
-                            nested_loader.load_modelspace(nested_blk)
-                            nested_loader.execute(xref_prefix=b_name)
-                        except Exception:
-                            pass
                 nested_blk.block.dxf.discard("xref_path")
                 n_flags = int(nested_blk.block.dxf.get("flags", 0))
                 nested_blk.block.dxf.flags = n_flags & ~BLK_XREF & ~BLK_XREF_OVERLAY & ~32
