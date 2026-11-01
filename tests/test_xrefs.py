@@ -596,3 +596,47 @@ def test_execute_bind_helper(tmp_path):
     assert ok is True
     assert not xrefs.is_xref_block(document.doc.blocks.get("topo"))
 
+
+def test_xref_bind_neutralizes_nested_xrefs(tmp_path):
+    """Binding an xref must never turn nested xrefs into top-level external references."""
+    from ezdxf import xref as ezxref
+
+    # Grandchild drawing
+    gc_doc = ezdxf.new("R2018")
+    gc_doc.modelspace().add_line((0, 0), (5, 5))
+    gc_path = tmp_path / "grandchild.dxf"
+    gc_doc.saveas(gc_path)
+
+    # Child drawing (contains an attachment to grandchild and a missing xref)
+    child_doc = ezdxf.new("R2018")
+    child_doc.modelspace().add_line((0, 0), (10, 10))
+    ezxref.attach(child_doc, block_name="grandchild", filename=str(gc_path), insert=(0, 0))
+    ezxref.attach(child_doc, block_name="missing_ref", filename="nonexistent.dwg", insert=(10, 10))
+    child_path = tmp_path / "child.dxf"
+    child_doc.saveas(child_path)
+
+    # Host drawing (attaches child)
+    host_doc = ezdxf.new("R2018")
+    ezxref.attach(host_doc, block_name="child", filename=str(child_path), insert=(0, 0))
+    host_path = tmp_path / "host.dxf"
+    host_doc.saveas(host_path)
+
+    document = Document.load(host_path)
+    refs_before = [r.name for r in xrefs.references(document)]
+    assert refs_before == ["child"]
+
+    # Bind child
+    cmd = xrefs.BindXrefCommand("child", mode="bind")
+    cmd.do(document)
+
+    # All external references are gone (child is bound, and nested refs are NOT top-level xrefs)
+    refs_after = [r.name for r in xrefs.references(document)]
+    assert refs_after == []
+
+    # Nested blocks exist as local blocks without xref identity
+    assert "child$0$grandchild" in document.doc.blocks
+    assert not xrefs.is_xref_block(document.doc.blocks.get("child$0$grandchild"))
+    assert "child$0$missing_ref" in document.doc.blocks
+    assert not xrefs.is_xref_block(document.doc.blocks.get("child$0$missing_ref"))
+
+

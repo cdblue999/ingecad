@@ -689,6 +689,34 @@ class BindXrefCommand(Command):
         except Exception:
             pass
 
+        # In AutoCAD / CAD standard: binding an XREF must NEVER inject new external
+        # reference dependencies into the host drawing. Any nested XREF blocks
+        # transferred from the child drawing must have their XREF identity severed
+        # and become pure internal blocks:
+        for b_name in self._added_blocks:
+            nested_blk = doc.blocks.get(b_name)
+            if nested_blk is not None and is_xref_block(nested_blk):
+                raw_nested_path = xref_path_of(nested_blk)
+                if raw_nested_path:
+                    nested_resolved = resolve_path(host_path, raw_nested_path)
+                    if nested_resolved is None and resolved.parent:
+                        nested_resolved = resolve_path(resolved.parent, raw_nested_path)
+                    if nested_resolved and nested_resolved.is_file():
+                        try:
+                            nested_doc = read_drawing(nested_resolved).doc
+                            nested_loader = xref.Loader(nested_doc, doc, conflict_policy=policy)
+                            nested_loader.load_modelspace(nested_blk)
+                            nested_loader.execute(xref_prefix=b_name)
+                        except Exception:
+                            pass
+                nested_blk.block.dxf.discard("xref_path")
+                n_flags = int(nested_blk.block.dxf.get("flags", 0))
+                nested_blk.block.dxf.flags = n_flags & ~BLK_XREF & ~BLK_XREF_OVERLAY & ~32
+                try:
+                    nested_blk.block.set_flag_state(const.BLK_XREF | const.BLK_EXTERNAL, state=False)
+                except Exception:
+                    pass
+
         origin = ext_doc.header.get("$INSBASE")
         if origin:
             block.block.dxf.base_point = Vec3(origin)

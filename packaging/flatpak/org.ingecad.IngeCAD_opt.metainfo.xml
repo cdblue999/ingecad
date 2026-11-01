@@ -86,6 +86,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.7.4" date="2026-11-01">
+      <description>
+        <p>Fix XREF BIND nested references pollution: prevent nested XREF blocks copied from child drawings from retaining active XREF flags and paths, eliminating broken "Not found" entries and duplicate XREF loads in host drawings.</p>
+        <p xml:lang="es">Corrección de referencias anidadas al unir XREFs: evita que los bloques XREF anidados copiados del plano secundario conserven indicadores y rutas activas, eliminando entradas erróneas 'No encontrado' y cargas duplicadas en el plano anfitrión.</p>
+      </description>
+    </release>
     <release version="0.7.3" date="2026-10-31">
       <description>
         <p>Implement AutoCAD-standard XREF Bind and Insert operations: Bind mode with $0$ symbol namespacing and Insert mode with direct symbol merging. Adds Bind button and right-click context menu to the External References palette, BIND and XBIND commands, and -XREF Bind CLI options with full undo/redo support.</p>
