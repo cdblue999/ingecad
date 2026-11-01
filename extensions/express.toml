@@ -1,0 +1,23 @@
+# IngeCAD Extension Catalog Manifest for Express Tools
+# Catalog: https://github.com/ingelibre/ingecad-extensions
+
+id = "express"
+version = "1.0.0"
+author = "cdblue999"
+author_url = "https://github.com/cdblue999"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/cdblue999/ingecad"
+download = "https://github.com/cdblue999/ingecad/releases/download/v1.0.0/express.zip"
+sha256 = "5fd705c0f348e57ae01a884e3dd0836a7c3d6d1a89ec8f009efd438386ad0dad"
+ingecad = "0.7.0"
+tags = ["drawing", "annotation", "productivity"]
+
+[name]
+en = "Express Tools"
+es = "Express Tools"
+pt = "Express Tools"
+
+[summary]
+en = "Productivity tools for text, blocks, drafting and geometry inspired by AutoCAD Express Tools (BURST, FLATTEN, TXT2MTXT, BCOUNT, TCASE, TCOUNT, TCIRCLE, EXTRIM, BREAKLINE)."
+es = "Herramientas de productividad para texto, bloques, dibujo y geometría inspiradas en AutoCAD Express Tools (BURST, FLATTEN, TXT2MTXT, BCOUNT, TCASE, TCOUNT, TCIRCLE, EXTRIM, BREAKLINE)."
+pt = "Ferramentas de produtividade para texto, blocos, desenho e geometria inspiradas no AutoCAD Express Tools (BURST, FLATTEN, TXT2MTXT, BCOUNT, TCASE, TCOUNT, TCIRCLE, EXTRIM, BREAKLINE)."
