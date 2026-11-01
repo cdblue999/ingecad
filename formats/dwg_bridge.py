@@ -37,10 +37,23 @@ def _find_tool(name: str) -> Optional[Path]:
     bundled = _VENDOR_BIN / exe
     if bundled.is_file():
         return bundled
+    # Check runner internal structure for Windows package
+    try:
+        app_dir = paths.app_root()
+        for cand in [
+            app_dir / "internal" / "vendor" / "libredwg" / "bin" / exe,
+            app_dir / "vendor" / "libredwg" / "bin" / exe,
+            Path(sys.executable).parent / "internal" / "vendor" / "libredwg" / "bin" / exe,
+            Path(sys.executable).parent / "vendor" / "libredwg" / "bin" / exe,
+        ]:
+            if cand.is_file():
+                return cand
+    except Exception:
+        pass
     flatpak_bundled = Path("/app/ingecad/vendor/libredwg/bin") / exe
     if flatpak_bundled.is_file():
         return flatpak_bundled
-    system = shutil.which(name)
+    system = shutil.which(exe) or shutil.which(name)
     return Path(system) if system else None
 
 

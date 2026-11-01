@@ -8,14 +8,37 @@ on:
         required: false
         default: 'v1.0.0'
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "dev-windows-opt" ]
+    tags: [ "v*" ]
 
 permissions:
   contents: write
 
 jobs:
+  converters:
+    name: LibreDWG for win64 (mingw)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: mingw-w64
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 make curl
+      - name: Cross-build the patched converters
+        run: tools/libredwg-patches/build-vendor-windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libredwg-win64
+          path: vendor/libredwg/win64/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
   build-windows-app:
+    name: Build Windows Application
+    needs: converters
     runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
       - name: 1. Pobranie kodu repozytorium
@@ -27,18 +50,24 @@ jobs:
           python-version: '3.11'
           architecture: 'x64'
 
-      - name: 3. Instalacja zależności IngeCAD
+      - name: 3. Pobranie konwerterów LibreDWG dla win64
+        uses: actions/download-artifact@v4
+        with:
+          name: libredwg-win64
+          path: vendor/libredwg/bin
+
+      - name: 4. Instalacja zależności IngeCAD
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: 4. Konfiguracja kompilatora Rust
+      - name: 5. Konfiguracja kompilatora Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: 5. Przygotowanie i kompilacja Launchera w Rust
+      - name: 6. Przygotowanie i kompilacja Launchera w Rust
         shell: pwsh
         run: |
           # Inicjalizacja projektu Rust w podfolderze wrapper
@@ -77,18 +106,34 @@ jobs:
           cargo build --release --target x86_64-pc-windows-msvc
           Set-Location ..
 
-      - name: 6. Budowanie i pakowanie aplikacji pod Windows 11
+      - name: 7. Budowanie i pakowanie aplikacji pod Windows 11
         shell: pwsh
         run: |
-          # Zamrożenie silnika aplikacji CAD do postaci wykonywalnej
-          pyinstaller --noconfirm --onedir --windowed --name "IngeCAD_Engine" main.py
+          # Zamrożenie silnika aplikacji CAD do postaci wykonywalnej wraz z zasobami
+          pyinstaller --noconfirm --onedir --windowed --name "IngeCAD_Engine" `
+            --add-data "resources;resources" `
+            --add-data "i18n;i18n" `
+            --add-data "plugins;plugins" `
+            main.py
 
-          # Przygotowanie struktury dystrybucyjnej dla użytkownika
+          # Przygotowanie kompletnej struktury dystrybucyjnej dla użytkownika
           New-Item -ItemType Directory -Force -Path dist_package
           New-Item -ItemType Directory -Force -Path dist_package/internal
+          New-Item -ItemType Directory -Force -Path dist_package/internal/vendor/libredwg/bin
 
-          # Skopiowanie plików silnika i zasobów
+          # Skopiowanie plików silnika, wtyczek i zasobów
           Copy-Item -Path "dist/IngeCAD_Engine/*" -Destination "dist_package/internal" -Recurse
+          Copy-Item -Path "plugins" -Destination "dist_package/internal/plugins" -Recurse
+          Copy-Item -Path "resources" -Destination "dist_package/internal/resources" -Recurse
+          Copy-Item -Path "i18n" -Destination "dist_package/internal/i18n" -Recurse
+          if (Test-Path "extensions") {
+              Copy-Item -Path "extensions" -Destination "dist_package/internal/extensions" -Recurse
+          }
+
+          # Skopiowanie konwerterów DWG/DXF (LibreDWG) dla obsługi DWG XREF i BIND na Windows
+          if (Test-Path "vendor/libredwg/bin") {
+              Copy-Item -Path "vendor/libredwg/bin/*" -Destination "dist_package/internal/vendor/libredwg/bin" -Recurse
+          }
           
           # Skopiowanie binarnego launchera Rust jako głównego pliku .exe
           Copy-Item "ingecad-runner/target/x86_64-pc-windows-msvc/release/ingecad-runner.exe" -Destination "dist_package/IngeCAD.exe"
@@ -96,19 +141,19 @@ jobs:
           # Spakowanie do archiwum ZIP
           Compress-Archive -Path dist_package/* -DestinationPath IngeCAD-Windows-x64.zip -Force
 
-      - name: 7. Zapisanie artefaktu (dostępny przez 7 dni w Actions)
+      - name: 8. Zapisanie artefaktu (dostępny przez 7 dni w Actions)
         uses: actions/upload-artifact@v4
         with:
           name: IngeCAD-Windows-x64
           path: IngeCAD-Windows-x64.zip
           retention-days: 7
 
-      - name: 8. Publikacja do GitHub Releases (dla uruchomień ręcznych)
+      - name: 9. Publikacja do GitHub Releases (dla uruchomień ręcznych i tagów)
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
         with:
-          tag_name: ${{ github.event.inputs.release_tag || 'latest' }}
-          name: "IngeCAD Windows 11 (${{ github.event.inputs.release_tag || 'latest' }})"
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          name: "IngeCAD Windows 11 (${{ github.event.inputs.release_tag || github.ref_name }})"
           draft: false
           prerelease: false
           files: IngeCAD-Windows-x64.zip
