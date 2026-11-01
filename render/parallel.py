@@ -183,7 +183,9 @@ def _fork_and_merge(make_frontend, model, min_cost, processes, plan,
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
-    global _WORK
+    global _WORK, _ACTIVE_POOL, _ABORT_REQUESTED
+    if _ABORT_REQUESTED:
+        return None
     _WORK = work                  # the forked children find it here
     try:
         with warnings.catch_warnings():
@@ -196,12 +198,16 @@ def _fork_and_merge(make_frontend, model, min_cost, processes, plan,
             pool = ProcessPoolExecutor(
                 max_workers=min(processes, len(jobs)),
                 mp_context=multiprocessing.get_context("fork"))
+            _ACTIVE_POOL = pool
             try:
                 _spawn_gently(pool)
+                if _ABORT_REQUESTED:
+                    return None
                 # the children fork on the first submit, inside this filter
                 parts = list(pool.map(_run_share, range(len(jobs)),
                                       timeout=TIMEOUT_S))
             finally:
+                _ACTIVE_POOL = None
                 for process in list(getattr(pool, "_processes", {}).values()):
                     process.kill()    # a stuck child must not outlive the regen
                 pool.shutdown(wait=False, cancel_futures=True)
@@ -215,6 +221,31 @@ def _fork_and_merge(make_frontend, model, min_cost, processes, plan,
     import gc
     gc.collect()
     return merged
+
+
+_ACTIVE_POOL = None
+_ABORT_REQUESTED = False
+
+
+def abort_parallel() -> None:
+    """Abort any running parallel regeneration immediately (e.g. on exit)."""
+    global _ACTIVE_POOL, _ABORT_REQUESTED
+    _ABORT_REQUESTED = True
+    pool = _ACTIVE_POOL
+    if pool is not None:
+        try:
+            for process in list(getattr(pool, "_processes", {}).values()):
+                process.kill()
+            pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        _ACTIVE_POOL = None
+
+
+def reset_abort() -> None:
+    """Reset the abort flag for subsequent regeneration."""
+    global _ABORT_REQUESTED
+    _ABORT_REQUESTED = False
 
 
 #: Pause between two forks, so the GUI thread gets the interpreter back.

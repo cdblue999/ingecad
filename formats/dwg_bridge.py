@@ -241,6 +241,89 @@ def _dedupe_handles(dxf_path: Path) -> int:
     return len(collisions)
 
 
+def _sanitize_dxf(dxf_path: Path) -> tuple[int, int]:
+    """Sanitize LibreDWG's DXF output in a single fast pass.
+
+    Combines:
+    1. Dropping null handles (5, 0)
+    2. Deduplicating and renumbering reused handles (LibreDWG #1356)
+
+    Avoids multi-pass disk reads, string splits, and avoids disk writes if no changes are needed.
+    Returns (dropped_nulls, renumbered_collisions).
+    """
+    lines = _read_dxf_lines(dxf_path)
+    n_lines = len(lines)
+    spots: list[tuple[int, str]] = []
+    seed_at: Optional[int] = None
+    section: Optional[str] = None
+    expecting = False
+    dropped_indices: set[int] = set()
+
+    i = 0
+    while i + 1 < n_lines:
+        code = lines[i].strip()
+        val = lines[i + 1].strip()
+
+        # Check null handle: code 5, val 0
+        if code == "5" and val == "0":
+            dropped_indices.add(i)
+            dropped_indices.add(i + 1)
+            i += 2
+            continue
+
+        if code == "0":
+            if val == "ENDSEC":
+                section = None
+            expecting = val not in ("SECTION", "ENDSEC", "EOF")
+        elif code == "2" and section is None:
+            section = val
+        elif code == "9" and val == "$HANDSEED" and i + 3 < n_lines:
+            if lines[i + 2].strip() == "5":
+                seed_at = i + 3
+        elif code == "5" and expecting and section in _HANDLE_SECTIONS:
+            spots.append((i + 1, val))
+            expecting = False
+
+        i += 2
+
+    def as_int(handle: str) -> Optional[int]:
+        try:
+            return int(handle, 16)
+        except ValueError:
+            return None
+
+    seen: set[str] = set()
+    collisions: list[int] = []
+    for idx, handle in spots:
+        if handle in seen:
+            collisions.append(idx)
+        else:
+            seen.add(handle)
+
+    if collisions:
+        used = {h for _, h in spots}
+        sane = [n for n in (as_int(h) for _, h in spots) if n is not None and n < _MAX_SANE_HANDLE]
+        nxt = (max(sane) if sane else 0) + 1
+        for idx in collisions:
+            while format(nxt, "X") in used:
+                nxt += 1
+            fresh = format(nxt, "X")
+            used.add(fresh)
+            lines[idx] = fresh
+            nxt += 1
+        if seed_at is not None:
+            lines[seed_at] = format(nxt, "X")
+
+    if dropped_indices or collisions:
+        if dropped_indices:
+            out = [line for idx, line in enumerate(lines) if idx not in dropped_indices]
+            _write_dxf_lines(dxf_path, out)
+        else:
+            _write_dxf_lines(dxf_path, lines)
+
+    return len(dropped_indices) // 2, len(collisions)
+
+
 def dwg_to_dxf(dwg_path: Path) -> Path:
     """Convert a DWG to a temporary DXF; returns the DXF path.
 
@@ -249,8 +332,7 @@ def dwg_to_dxf(dwg_path: Path) -> Path:
     plain even when the input drawing name carries accents.
     """
     out_dxf = _convert_dwg(dwg_path)
-    _strip_null_handles(out_dxf)
-    _dedupe_handles(out_dxf)
+    _sanitize_dxf(out_dxf)
     return out_dxf
 
 
@@ -292,8 +374,8 @@ def load_dwg(dwg_path: Path, progress=None):
     """
     from core.document import Document
 
-    from core.encoding import (decode_escapes_in_document, repair_dimension_rotation,
-                               repair_dimstyle_defaults, repair_invalid_defaults)
+    from core.encoding import (decode_and_repair_mtext, repair_dimension_rotation,
+                               repair_dimstyle_defaults)
     from core.layouts import repair_missing_main_viewports, repair_viewport_status
 
     dwg_path = Path(dwg_path)
@@ -307,11 +389,8 @@ def load_dwg(dwg_path: Path, progress=None):
     # \U+xxxx is what AutoCAD writes for a character its codepage cannot
     # hold — and what we write ourselves on save (see core.encoding). ezdxf
     # does not decode it, so without this the canvas shows the raw code.
-    decode_escapes_in_document(document.doc)
-    # DWGs IngeCAD saved before v0.4.5 carry zeroed MTEXT spacing (the
-    # missing-group-becomes-zero bug this same module now writes around):
-    # normalize them so those files render right again.
-    repair_invalid_defaults(document.doc)
+    # Also normalizes invalid MTEXT spacing defaults in the same pass.
+    decode_and_repair_mtext(document.doc)
     # LibreDWG leaves a DIMSTYLE's zeros implicit; ezdxf would read some of
     # them as its own non-zero defaults (DIMZIN 8 dropped trailing zeros).
     repair_dimstyle_defaults(document.doc)
@@ -455,7 +534,8 @@ def _error_detail(errors: list[str], most: int = 3) -> str:
     return detail
 
 
-def write_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> list[str]:
+def write_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000",
+              verify: bool | None = None) -> list[str]:
     """Write a DWG from a DXF through LibreDWG (bundled), then verify it.
 
     IngeCAD ships a patched LibreDWG and writes AutoCAD r2000 (opens in every
@@ -463,9 +543,30 @@ def write_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> list[st
     layout settings and a few r2013+ display features are simplified on the
     way out; the geometry, layers, blocks, text and hatches round-trip
     faithfully. Returns verification warnings (empty list = clean save).
+
+    When verify is False (or omitted when not enabled in settings), redundant
+    reverse-conversion and entity counting is skipped for fast saving, while
+    still verifying writer errors from stderr.
     """
     stderr = dxf_to_dwg(dxf_path, dwg_path, version)
-    return verify_dwg(Path(dxf_path), Path(dwg_path), stderr)
+    if verify is None:
+        try:
+            from PySide6.QtCore import QSettings
+
+            verify = str(QSettings().value("save/verify_dwg", "false")).lower() in ("true", "1")
+        except Exception:
+            verify = False
+
+    if verify:
+        return verify_dwg(Path(dxf_path), Path(dwg_path), stderr)
+
+    errors = _converter_errors(stderr)
+    if errors:
+        from core.i18n import tr
+
+        return [tr("the DWG writer reported internal errors while packing the "
+                   "file: {detail}", detail=_error_detail(errors))]
+    return []
 
 
 def dxf_to_dwg(dxf_path: Path, dwg_path: Path, version: str = "r2000") -> str:

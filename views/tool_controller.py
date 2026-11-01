@@ -125,17 +125,24 @@ class _CacheWarmer(QThread):
         # viewport of a big plan would pay the whole model walk in the GUI.
         model_engine = None
         try:
+            if self.isInterruptionRequested():
+                return
             index._build()
+            if self.isInterruptionRequested():
+                return
             engine._build()
             if (self._model_engine and space != "Model"
                     and not getattr(self._document, "edit_block", None)):
+                if self.isInterruptionRequested():
+                    return
                 model_engine = SnapEngine(
                     self._document, space=self._document.doc.modelspace())
                 model_engine._build()
         except Exception:
             index = engine = model_engine = None   # doc mutated mid-walk
-        self.done.emit(self._document, index, engine, revision, space,
-                       model_engine)
+        if not self.isInterruptionRequested():
+            self.done.emit(self._document, index, engine, revision, space,
+                           model_engine)
 
 
 class _GhostWorker(QThread):

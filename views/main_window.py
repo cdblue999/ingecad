@@ -90,6 +90,8 @@ class _OpenWorker(QThread):
             else:
                 self.phase.emit("Reading the drawing...")
                 document = Document.load(self._path)
+            if self.isInterruptionRequested():
+                return
             self.phase.emit("Regenerating...")
             scene = build_scene(document)
         except (DocumentError, DwgBridgeError) as exc:
@@ -97,7 +99,8 @@ class _OpenWorker(QThread):
         except Exception as exc:  # a malformed file must never crash the app
             self.failed.emit(f"{type(exc).__name__}: {exc}")
         else:
-            self.done.emit(document, scene)
+            if not self.isInterruptionRequested():
+                self.done.emit(document, scene)
 
 
 class RegenWorker(QThread):
@@ -119,9 +122,17 @@ class RegenWorker(QThread):
         self._layout = layout
         self._revision = revision
 
+    def abort(self) -> None:
+        from render import parallel
+
+        parallel.abort_parallel()
+        self.requestInterruption()
+
     def run(self) -> None:
         from core import gc_guard
+        from render import parallel
 
+        parallel.reset_abort()
         with gc_guard.paused():      # never collect Qt garbage off the GUI thread
             self._run()
 
@@ -132,13 +143,16 @@ class RegenWorker(QThread):
 
         t0 = time.perf_counter()
         try:
+            if self.isInterruptionRequested():
+                return
             scene = build_scene(self._document, self._layout)
         except Exception:
             scene = None    # doc mutated mid-read (or bad data): stale
         # Measured cost of this layout's regen: the viewport pan/zoom path
         # uses it to decide whether a live synchronous rebuild is affordable.
         self.duration_ms = (time.perf_counter() - t0) * 1000.0
-        self.done.emit(self._document, scene, self._revision, self._layout)
+        if not self.isInterruptionRequested():
+            self.done.emit(self._document, scene, self._revision, self._layout)
 
 
 class _LiveSceneWorker(QThread):
@@ -6468,17 +6482,40 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
             return False
         return bool(self.restoreGeometry(geometry))
 
+    def _safe_drain_thread(self, thread, timeout_ms: int = 150) -> None:
+        """Safely signal, wait with timeout, and terminate if stuck so closing never hangs."""
+        if thread is None:
+            return
+        try:
+            if hasattr(thread, "isRunning") and not thread.isRunning():
+                return
+            if hasattr(thread, "requestInterruption"):
+                thread.requestInterruption()
+            if hasattr(thread, "wait") and not thread.wait(timeout_ms):
+                if hasattr(thread, "terminate"):
+                    thread.terminate()
+                if hasattr(thread, "wait"):
+                    thread.wait(50)
+        except Exception:
+            pass
+
     def _drain_workers(self) -> None:
         """Join every background thread before the window dies.
 
         Qt aborts the whole process ("QThread: Destroyed while thread is
-        still running") when a live worker's owner is destroyed — closing
-        the app with a regen in flight was a guaranteed SIGABRT on exit.
-        The results are not wanted any more, only the joins.
+        still running") when a live worker's owner is destroyed.
+        Workers are cleanly signalled and joined with bounded timeouts.
         """
+        # 1. Instantly abort any active parallel rendering in background
+        from render import parallel
+
+        parallel.abort_parallel()
+
+        # 2. Critical file save gets a clean wait
         saving = getattr(self, "_save_worker", None)
-        if saving is not None:
-            saving.wait()
+        if saving is not None and saving.isRunning():
+            saving.wait(5000)
+
         assistant = getattr(self, "_assistant_panel", None)
         if assistant is not None:
             assistant.shutdown()
@@ -6486,13 +6523,24 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
         if bridge is not None:
             bridge.close()
             self._mcp_bridge = None
+
+        timer = getattr(self, "_autosave_timer", None)
+        if timer is not None:
+            timer.stop()
+        auto = getattr(self, "_autosave_worker", None)
+        if auto is not None:
+            self._safe_drain_thread(auto, 200)
+            self._autosave_worker = None
+
         live = getattr(self, "_vp_live_worker", None)
         if live is not None:
             try:
                 live.done.disconnect(self._on_live_scene_done)
             except (RuntimeError, TypeError):
                 pass
-            live.wait()
+            self._safe_drain_thread(live, 100)
+            self._vp_live_worker = None
+
         worker = self._regen_worker
         if worker is not None:
             self._regen_worker = None
@@ -6500,18 +6548,13 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                 worker.done.disconnect(self._on_regen_done)
             except (RuntimeError, TypeError):
                 pass          # already disconnected
-            worker.wait()
+            self._safe_drain_thread(worker, 150)
+
         thread = getattr(self, "_open_thread", None)
         if thread is not None:
-            thread.wait()
+            self._safe_drain_thread(thread, 150)
             self._open_thread = None
-        timer = getattr(self, "_autosave_timer", None)
-        if timer is not None:
-            timer.stop()
-        auto = getattr(self, "_autosave_worker", None)
-        if auto is not None:
-            auto.wait()
-            self._autosave_worker = None
+
         from views import startup_dialog as _startup
 
         _startup.drain_orphans()    # thumbnail workers the dialog left behind
@@ -6522,7 +6565,12 @@ class MainWindow(DocumentTabsMixin, QMainWindow):
                 timer.stop()
             for attr in ("_warmers", "_ghost_workers", "_clip_writers"):
                 for w in list(getattr(tools, attr, ()) or ()):
-                    w.wait()
+                    self._safe_drain_thread(w, 100)
+                setattr(tools, attr, set() if attr == "_warmers" else [])
+
+        from core import gc_guard
+
+        gc_guard.force_enable()
 
     def _save_off_the_ui_thread(self, path: Path, version: str):
         """Save, keeping the window alive: the whole save runs on a

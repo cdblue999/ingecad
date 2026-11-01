@@ -297,7 +297,9 @@ class AssistantPanel(QWidget):
             except (RuntimeError, TypeError):
                 pass
             worker.stop()
-            worker.wait()
+            if not worker.wait(200):
+                worker.terminate()
+                worker.wait(50)
             self._worker = None
             if self._turn is not None:
                 self._turn.__exit__(None, None, None)
