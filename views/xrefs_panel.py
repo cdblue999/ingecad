@@ -150,6 +150,17 @@ class XrefsPanel(QWidget):
         return chosen[1] if chosen is not None and chosen[0] == "dwg" else None
 
     def _sync_buttons(self) -> None:
+        is_busy = getattr(self.window, "_busy_regen", False) or (
+            getattr(self.window, "_regen_worker", None) is not None
+            and self.window._regen_worker.isRunning()
+        )
+        if is_busy:
+            self.bind_btn.setEnabled(False)
+            self.detach_btn.setEnabled(False)
+            self.reload_btn.setEnabled(False)
+            self.unload_btn.setEnabled(False)
+            self.attach_btn.setEnabled(False)
+            return
         chosen = self.selected()
         is_dwg = chosen is not None and chosen[0] == "dwg"
         self.bind_btn.setEnabled(is_dwg)
@@ -206,8 +217,15 @@ class XrefsPanel(QWidget):
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtWidgets import QApplication
 
+        if hasattr(self.window, "wait_for_regen"):
+            self.window.wait_for_regen()
+
         QGuiApplication.setOverrideCursor(Qt.WaitCursor)
         self.window._loading_begin(tr("Binding external reference {name}...", name=name))
+        self.bind_btn.setEnabled(False)
+        self.detach_btn.setEnabled(False)
+        self.reload_btn.setEnabled(False)
+        self.unload_btn.setEnabled(False)
         QApplication.processEvents()
         try:
             self.window.tools._execute(xrefs.BindXrefCommand(name, mode=mode))
@@ -222,6 +240,7 @@ class XrefsPanel(QWidget):
         finally:
             self.window._loading_end()
             QGuiApplication.restoreOverrideCursor()
+            self._sync_buttons()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         # images are attached by tools that do not report here: the tab

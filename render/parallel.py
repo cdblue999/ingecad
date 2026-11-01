@@ -56,7 +56,9 @@ def available() -> bool:
 
 
 def workers() -> int:
-    return max(1, min(8, (os.cpu_count() or 1) - 1))
+    # Cap parallel workers to 4 to prevent memory explosion during large drawing regens
+    # while maintaining maximum multi-core throughput.
+    return max(1, min(4, (os.cpu_count() or 1) - 1))
 
 
 def cost_model(doc):
@@ -209,7 +211,10 @@ def _fork_and_merge(make_frontend, model, min_cost, processes, plan,
         return None
     finally:
         _WORK = None
-    return _merge(make_frontend()[1], parts)
+    merged = _merge(make_frontend()[1], parts)
+    import gc
+    gc.collect()
+    return merged
 
 
 #: Pause between two forks, so the GUI thread gets the interpreter back.
